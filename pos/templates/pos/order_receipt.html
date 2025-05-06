@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Receipt</title>
+    <style>
+        body {
+            font-family: "Courier New", Courier, monospace;
+            font-size: 12px;
+            margin: 0;
+            padding: 10px;
+        }
+        .center {
+            text-align: center;
+        }
+        .bold {
+            font-weight: bold;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        td {
+            padding: 4px 0;
+        }
+        .total {
+            margin-top: 10px;
+            font-size: 14px;
+            font-weight: bold;
+        }
+        .small {
+            font-size: 10px;
+        }
+        img.logo {
+            width: 100px;
+            height: auto;
+            margin-bottom: 5px;
+        }
+        hr {
+            border: none;
+            border-top: 1px dashed #000;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+
+<div class="center">
+    <!-- Logo toko atau QRIS di atas -->
+    {% if shop.logo %}
+        <img src="{{ shop.logo.url }}" alt="Shop Logo" class="logo">
+    {% endif %}
+
+    <div class="bold">{{ shop.name }}</div>
+    <div class="small">{{ shop.address }}</div>
+    <div class="small">{{ shop.phone }}</div>
+    <hr>
+
+    <div><b>Invoice:</b> INV{{ order.id|stringformat:"015d" }}</div>
+    <div><b>Data:</b> {{ order.created_at|date:"d-m-Y H:i" }}</div>
+    <div><b>Kasir:</b> {{ order.served_by.username }}</div>
+</div>
+
+<hr>
+
+<table>
+    {% for item in order.items.all %}
+    <tr>
+        <td colspan="2">{{ item.product.name }}</td>
+    </tr>
+    <tr>
+        <td class="small">{{ item.quantity }} x ${{ item.price }}</td>
+        <td class="small" style="text-align: right;">${{ item.quantity|floatformat:2|add:"0"|floatformat:2|floatformat }}{{ item.price }}</td>
+    </tr>
+    {% endfor %}
+</table>
+
+<hr>
+
+<div class="total">
+    Subtotal: ${{ order.subtotal|floatformat:2 }}<br>
+    Discount: ${{ order.discount|floatformat:2 }}<br>
+    Tax: ${{ order.tax|floatformat:2 }}<br>
+    Total: ${{ order.total|floatformat:2 }}
+</div>
+
+<hr>
+
+<div class="center small">
+    Obrigado Barak! 👋<br>
+    {{ shop.name }}
+</div>
+
+</body>
+</html>

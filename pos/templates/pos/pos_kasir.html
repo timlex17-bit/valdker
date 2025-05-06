@@ -1,0 +1,70 @@
+{% extends 'admin/base_site.html' %}
+{% block content %}
+<h1>POS Kasir</h1>
+
+<!-- Produtu -->
+<h2>Produtu</h2>
+<div style="display: flex; flex-wrap: wrap; gap: 20px;">
+  {% for product in products %}
+    <div style="width: 150px; border: 1px solid #ddd; border-radius: 10px; padding: 10px; text-align: center;">
+      {% if product.image %}
+        <img src="{{ product.image.url }}" alt="{{ product.name }}" style="width: 100px; height: 100px; object-fit: cover; margin-bottom: 10px;">
+      {% else %}
+        <div style="width: 100px; height: 100px; background: #eee; margin-bottom: 10px; display: flex; align-items: center; justify-content: center;">No Image</div>
+      {% endif %}
+      <h5 style="margin: 0;">{{ product.name }}</h5>
+      <p style="margin: 5px 0;">${{ product.sell_price }}</p>
+
+      <form method="post" action="">
+        {% csrf_token %}
+        <input type="hidden" name="product_id" value="{{ product.id }}">
+        <input type="number" name="quantity" value="1" min="1" style="width: 60px;">
+        <button type="submit" class="btn btn-primary btn-sm" style="margin-top: 5px;">Add</button>
+      </form>
+    </div>
+  {% endfor %}
+</div>
+
+
+<hr>
+
+<!-- Kerosa Kompra -->
+<h2>Karosa</h2>
+<table class="table">
+    <thead>
+        <tr>
+            <th>Produtu</th>
+            <th>Quantidade</th>
+            <th>Subtotal</th>
+            <th>Aksaun</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for item in cart_items %}
+        <tr>
+            <td>{{ item.product.name }}</td>
+            <td>{{ item.quantity }}</td>
+            <td>${{ item.subtotal }}</td>
+            <td><a href="{% url 'pos_remove_from_cart' item.product.id %}" class="btn btn-danger">Halakon</a></td>
+        </tr>
+        {% empty %}
+        <tr><td colspan="4">Karosa Mamuk.</td></tr>
+        {% endfor %}
+    </tbody>
+</table>
+
+<!-- Total & Checkout -->
+<h3>Total: ${{ total }}</h3>
+
+<form method="POST" action="{% url 'pos_checkout' %}">
+    {% csrf_token %}
+    <label>Metode Pagamentu:</label>
+    <select name="payment_method" class="form-control" style="width: 200px;">
+        <option value="cash">Cash</option>
+        <option value="card">Card</option>
+        <option value="qris">QRIS</option>
+    </select>
+    <br>
+    <button type="submit" class="btn btn-success">Pagamentu</button>
+</form>
+{% endblock %}

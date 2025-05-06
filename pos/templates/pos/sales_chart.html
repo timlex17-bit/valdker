@@ -1,0 +1,100 @@
+{% extends 'admin/base_site.html' %}
+{% block content %}
+<h1 style="margin-bottom: 30px;">📈 Sales Chart</h1>
+
+<!-- CARD VIEWS -->
+<div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 40px;">
+    <div style="background: #f1f3f5; padding: 20px; border-radius: 10px; box-shadow: 0 0 5px rgba(0,0,0,0.05);">
+        <h5>Total Order Price</h5>
+        <p><strong>${{ total_order_price }}</strong></p>
+    </div>
+    <div style="background: #fff3f3; padding: 20px; border-radius: 10px; box-shadow: 0 0 5px rgba(0,0,0,0.05);">
+        <h5>Total Tax</h5>
+        <p><strong>${{ total_tax }}</strong></p>
+    </div>
+    <div style="background: #e6f4ea; padding: 20px; border-radius: 10px; box-shadow: 0 0 5px rgba(0,0,0,0.05);">
+        <h5>Total Discount</h5>
+        <p><strong>${{ total_discount }}</strong></p>
+    </div>
+    <div style="background: #d4edda; padding: 20px; border-radius: 10px; box-shadow: 0 0 5px rgba(0,0,0,0.05);">
+        <h5>Net Sales Amount</h5>
+        <p><strong>${{ net_sales }}</strong></p>
+    </div>
+</div>
+
+<!-- LINE CHART -->
+<div style="margin-top: 50px;">
+    <h4>Monthly Total Volume of Product Sales (Line)</h4>
+    <canvas id="lineChart" height="120"></canvas>
+</div>
+
+<!-- BAR CHART -->
+<div style="margin-top: 50px;">
+    <h4>Monthly Total Volume of Product Sales (Bar)</h4>
+    <canvas id="barChart" height="120"></canvas>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+    const labels = {{ labels|safe }};
+    const salesData = {{ sales|safe }};
+
+    const lineCtx = document.getElementById('lineChart').getContext('2d');
+    const barCtx = document.getElementById('barChart').getContext('2d');
+
+    new Chart(lineCtx, {
+        type: 'line',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Total Sales',
+                data: salesData,
+                borderColor: '#007bff',
+                backgroundColor: 'rgba(0,123,255,0.2)',
+                tension: 0.3,
+                fill: true
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: value => '$' + value
+                    }
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            }
+        }
+    });
+
+    new Chart(barCtx, {
+        type: 'bar',
+        data: {
+            labels: labels,
+            datasets: [{
+                label: 'Total Sales',
+                data: salesData,
+                backgroundColor: '#28a745'
+            }]
+        },
+        options: {
+            responsive: true,
+            scales: {
+                y: {
+                    beginAtZero: true,
+                    ticks: {
+                        callback: value => '$' + value
+                    }
+                }
+            },
+            plugins: {
+                legend: { display: false }
+            }
+        }
+    });
+</script>
+{% endblock %}
