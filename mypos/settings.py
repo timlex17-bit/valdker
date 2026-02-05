@@ -27,6 +27,9 @@ ALLOWED_HOSTS = [
     "192.168.1.101",
     "192.168.1.102",
     "192.168.1.197",
+    
+    # ✅ Render domain
+    "valdker.onrender.com",
 ]
 
 # ✅ Untuk CSRF (kalau kamu pakai session/auth web). Untuk API token biasanya tidak wajib,
