@@ -103,13 +103,14 @@ CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = [
     "https://valdker-vue-js.vercel.app",
     "http://localhost:5173",
+    "http://127.0.0.1:5173",
 ]
 
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    "authorization",
+# supaya SEMUA preview vercel bisa akses
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https:\/\/.*\.vercel\.app$",
 ]
 
-# Izinkan method preflight dan POST dll
 CORS_ALLOW_METHODS = [
     "DELETE",
     "GET",
@@ -119,21 +120,27 @@ CORS_ALLOW_METHODS = [
     "PUT",
 ]
 
-# Header yang sering dipakai axios
-CORS_ALLOW_HEADERS = [
-    "accept",
-    "accept-encoding",
+CORS_ALLOW_HEADERS = list(default_headers) + [
     "authorization",
-    "content-type",
-    "dnt",
-    "origin",
-    "user-agent",
-    "x-csrftoken",
-    "x-requested-with",
 ]
 
-# Optional: kalau kamu kirim cookie/session (kalau tidak, boleh False)
 CORS_ALLOW_CREDENTIALS = False
+
+# Header yang sering dipakai axios
+# CORS_ALLOW_HEADERS = [
+#     "accept",
+#     "accept-encoding",
+#     "authorization",
+#     "content-type",
+#     "dnt",
+#     "origin",
+#     "user-agent",
+#     "x-csrftoken",
+#     "x-requested-with",
+# ]
+
+# Optional: kalau kamu kirim cookie/session (kalau tidak, boleh False)
+# CORS_ALLOW_CREDENTIALS = False
 
 # =========================
 # DATABASE
