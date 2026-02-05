@@ -11,6 +11,7 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 """
 
 from pathlib import Path
+from corsheaders.defaults import default_headers
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -98,10 +99,14 @@ AUTH_USER_MODEL = "pos.CustomUser"
 # Jangan pakai allow-all saat debug CORS,
 # lebih aman spesifik origin Vue kamu.
 CORS_ALLOW_ALL_ORIGINS = False
+
 CORS_ALLOWED_ORIGINS = [
+    "https://valdker-vue-js.vercel.app",
     "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://192.168.1.101:5173",
+]
+
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "authorization",
 ]
 
 # Izinkan method preflight dan POST dll
