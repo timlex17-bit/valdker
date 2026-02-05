@@ -70,8 +70,16 @@
         <td colspan="2">{{ item.product.name }}</td>
     </tr>
     <tr>
-        <td class="small">{{ item.quantity }} x ${{ item.price }}</td>
-        <td class="small" style="text-align: right;">${{ item.quantity|floatformat:2|add:"0"|floatformat:2|floatformat }}{{ item.price }}</td>
+        <!-- kiri: qty x unit price -->
+        <td class="small">
+            {{ item.quantity }} x ${{ item.price|floatformat:2 }}
+        </td>
+
+        <!-- kanan: line total = qty * price -->
+        <td class="small" style="text-align: right;">
+            {% widthratio item.price 1 item.quantity as line_total %}
+            ${{ line_total|floatformat:2 }}
+        </td>
     </tr>
     {% endfor %}
 </table>

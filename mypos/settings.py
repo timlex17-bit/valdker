@@ -13,153 +13,185 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 from pathlib import Path
 import os
 
-# Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+SECRET_KEY = "django-insecure-*1-$iq=etsqtx$pk0(aw-k+mq-o0imul3$umeu*$$#i@zskb%e"
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/5.0/howto/deployment/checklist/
-
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-*1-$iq=etsqtx$pk0(aw-k+mq-o0imul3$umeu*$$#i@zskb%e'
-
-# SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-CSRF_TRUSTED_ORIGINS = [
-    "https://mypos-production.up.railway.app",
+# ✅ Host yang boleh akses Django
+ALLOWED_HOSTS = [
+    "localhost",
+    "127.0.0.1",
+    "0.0.0.0",
+    "192.168.1.101",
+    "192.168.1.102",
+    "192.168.1.197",
 ]
 
-ALLOWED_HOSTS = ["mypos-production.up.railway.app", "localhost", "127.0.0.1"]
+# ✅ Untuk CSRF (kalau kamu pakai session/auth web). Untuk API token biasanya tidak wajib,
+# tapi aman ditambahkan supaya tidak conflict di masa depan.
+CSRF_TRUSTED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://192.168.1.101:5173",
 
-# Application definition
+    "http://localhost:8000",
+    "http://127.0.0.1:8000",
+    "http://192.168.1.101:8000",
+]
 
 INSTALLED_APPS = [
-    'jazzmin',
-    'pos',
-    'corsheaders',
-    'rest_framework',
-    'django.contrib.admin',
-    'django.contrib.auth',
-    'django.contrib.contenttypes',
-    'django.contrib.sessions',
-    'django.contrib.messages',
-    'django.contrib.staticfiles',
+    "jazzmin",
+    "pos",
+
+    # ✅ third party
+    "corsheaders",
+    "rest_framework",
+    "django_extensions",
+    "rest_framework.authtoken",
+
+    # ✅ django default
+    "django.contrib.admin",
+    "django.contrib.auth",
+    "django.contrib.contenttypes",
+    "django.contrib.sessions",
+    "django.contrib.messages",
+    "django.contrib.staticfiles",
 ]
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "rest_framework.authentication.TokenAuthentication",
+    ],
+    "DEFAULT_PERMISSION_CLASSES": [
+        "rest_framework.permissions.IsAuthenticated",
+    ],
+}
 
 MIDDLEWARE = [
-    'django.middleware.security.SecurityMiddleware',
-    'whitenoise.middleware.WhiteNoiseMiddleware',
-    'corsheaders.middleware.CorsMiddleware',
-    'django.contrib.sessions.middleware.SessionMiddleware',
-    'django.middleware.common.CommonMiddleware',
-    'django.middleware.csrf.CsrfViewMiddleware',
-    'django.contrib.auth.middleware.AuthenticationMiddleware',
-    'django.contrib.messages.middleware.MessageMiddleware',
-    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
+
+    # ✅ PENTING: corsheaders harus sebelum CommonMiddleware
+    "corsheaders.middleware.CorsMiddleware",
+
+    "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.common.CommonMiddleware",
+    "django.middleware.csrf.CsrfViewMiddleware",
+    "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "django.contrib.messages.middleware.MessageMiddleware",
+    "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
 
-STATIC_URL = '/static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
-STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
+ROOT_URLCONF = "mypos.urls"
+WSGI_APPLICATION = "mypos.wsgi.application"
 
-if os.getenv('RAILWAY_STATIC_URL'):
-    STATIC_URL = os.getenv('RAILWAY_STATIC_URL')
+AUTH_USER_MODEL = "pos.CustomUser"
 
-CORS_ALLOW_ALL_ORIGINS = True
+# =========================
+# ✅ CORS SETTINGS (DEV)
+# =========================
+# Jangan pakai allow-all saat debug CORS,
+# lebih aman spesifik origin Vue kamu.
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://192.168.1.101:5173",
+]
 
-ROOT_URLCONF = 'mypos.urls'
+# Izinkan method preflight dan POST dll
+CORS_ALLOW_METHODS = [
+    "DELETE",
+    "GET",
+    "OPTIONS",
+    "PATCH",
+    "POST",
+    "PUT",
+]
 
-AUTH_USER_MODEL = 'pos.CustomUser'
-# AUTHENTICATION_BACKENDS = [
-#     'django.contrib.auth.backends.ModelBackend',  # Default authentication backend
-#     'django.contrib.auth.backends.AllowAllUsersModelBackend',  # Allow all users to authenticate
-# ]
+# Header yang sering dipakai axios
+CORS_ALLOW_HEADERS = [
+    "accept",
+    "accept-encoding",
+    "authorization",
+    "content-type",
+    "dnt",
+    "origin",
+    "user-agent",
+    "x-csrftoken",
+    "x-requested-with",
+]
 
+# Optional: kalau kamu kirim cookie/session (kalau tidak, boleh False)
+CORS_ALLOW_CREDENTIALS = False
+
+# =========================
+# DATABASE
+# =========================
+DATABASES = {
+    "default": {
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
+    }
+}
+
+# =========================
+# TEMPLATES
+# =========================
 TEMPLATES = [
     {
-        'BACKEND': 'django.template.backends.django.DjangoTemplates',
-        'DIRS': [],
-        'APP_DIRS': True,
-        'OPTIONS': {
-            'context_processors': [
-                'django.template.context_processors.debug',
-                'django.template.context_processors.request',
-                'django.contrib.auth.context_processors.auth',
-                'django.contrib.messages.context_processors.messages',
-                'pos.context_processors.user_role_context',
+        "BACKEND": "django.template.backends.django.DjangoTemplates",
+        "DIRS": [],
+        "APP_DIRS": True,
+        "OPTIONS": {
+            "context_processors": [
+                "django.template.context_processors.debug",
+                "django.template.context_processors.request",
+                "django.contrib.auth.context_processors.auth",
+                "django.contrib.messages.context_processors.messages",
+                "pos.context_processors.user_role_context",
             ],
         },
     },
 ]
 
-WSGI_APPLICATION = 'mypos.wsgi.application'
-
-
-# Database
-# https://docs.djangoproject.com/en/5.0/ref/settings/#databases
-
-DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
-    }
-}
-
-
-# Password validation
-# https://docs.djangoproject.com/en/5.0/ref/settings/#auth-password-validators
-
-AUTH_PASSWORD_VALIDATORS = [
-    {
-        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
-    },
-    {
-        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
-    },
-]
-
-
-# Internationalization
-# https://docs.djangoproject.com/en/5.0/topics/i18n/
-
-LANGUAGE_CODE = 'en-us'
-
-TIME_ZONE = 'UTC'
-
+# =========================
+# I18N
+# =========================
+LANGUAGE_CODE = "en-us"
+TIME_ZONE = "UTC"
 USE_I18N = True
-
 USE_TZ = True
 
+# =========================
+# STATIC & MEDIA
+# =========================
+STATIC_URL = "/static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
-# Static files (CSS, JavaScript, Images)
-# https://docs.djangoproject.com/en/5.0/howto/static-files/
+MEDIA_URL = "/media/"
+MEDIA_ROOT = BASE_DIR / "media"
 
-STATIC_URL = 'static/'
-STATIC_ROOT = BASE_DIR / 'staticfiles'
+# Default PK
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
-# Default primary key field type
-# https://docs.djangoproject.com/en/5.0/ref/settings/#default-auto-field
-
-DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
-
-MEDIA_URL = '/media/'
-MEDIA_ROOT = BASE_DIR / 'media'
-
-#Konfigurasaun Jazzmin
+# Konfigurasaun Jazzmin
 JAZZMIN_SETTINGS = {
     "site_title": "MyPOS Admin",
     "site_header": "MyPOS Admin Panel",
     "welcome_sign": "Selamat Datang di MyPOS",
     "site_brand": "MyPOS",
+
+    # Sidebar
     "show_sidebar": True,
     "navigation_expanded": True,
+
+    "custom_css": "admin/css/force_jazzmin_sidebar.css",
+    "custom_js": "admin/js/force_sidebar_open.js",
+
     "icons": {
         "pos.Customer": "fas fa-user",
         "pos.Supplier": "fas fa-users-cog",
@@ -169,95 +201,108 @@ JAZZMIN_SETTINGS = {
         "pos.Order": "fas fa-shopping-cart",
         "pos.Expense": "fas fa-coins",
         "pos.Shop": "fas fa-store",
-        "auth.User": "fas fa-user-shield",
+        "pos.CustomUser": "fas fa-user-shield",
+        "pos.Banner": "fas fa-image",
+        "auth.Group": "fas fa-users",
+
+        # ✅ icon untuk TokenProxy (yang akan tampil di bawah)
+        "pos.TokenProxy": "fas fa-key",
     },
+
     "custom_links": {
-    "pos": [
-        {
-            "name": "Sales Report",
-            "url": "/reports/sales/",
-            "icon": "fas fa-chart-line",
-            "permissions": ["pos.view_order"]
-        },
-        {
-            "name": "Expense Report",
-            "url": "/reports/expense/",
-            "icon": "fas fa-file-invoice-dollar",
-            "permissions": ["pos.view_expense"]
-        },
-        {
-            "name": "Sales Chart",
-            "url": "/reports/sales-chart/",
-            "icon": "fas fa-chart-pie",
-            "permissions": ["pos.view_order"]
-        },
-        {
-            "name": "Expense Chart",
-            "url": "/reports/expense-chart/",
-            "icon": "fas fa-chart-area",
-            "permissions": ["pos.view_expense"]
-        },
-      ]
+        "pos": [
+            {
+                "name": "Sales Report",
+                "url": "/admin/reports/sales/",
+                "icon": "fas fa-chart-line",
+                "permissions": ["pos.view_order"],
+            },
+            {
+                "name": "Expense Report",
+                "url": "/admin/reports/expense/",
+                "icon": "fas fa-file-invoice-dollar",
+                "permissions": ["pos.view_expense"],
+            },
+            {
+                "name": "Sales Chart",
+                "url": "/admin/reports/sales-chart/",
+                "icon": "fas fa-chart-pie",
+                "permissions": ["pos.view_order"],
+            },
+            {
+                "name": "Expense Chart",
+                "url": "/admin/reports/expense-chart/",
+                "icon": "fas fa-chart-area",
+                "permissions": ["pos.view_expense"],
+            },
+        ]
     },
+
     "order_with_respect_to": [
-    "pos.Customer",
-    "pos.Supplier",
-    "pos.Product",
-    "pos.Order",
-    "pos.OrderItem",
-    "pos.Expense",
-    "pos.Category",
-    "pos.Unit",
-    "pos.Shop",
-    "auth.Group",
-    "auth.User"
-],
-"hide_apps": ["auth"],
-"hide_models": ["auth.User", "auth.Group"],
-"show_ui_builder": False,
-"show_ui_builder": False,
-# "custom_apps": {
-#     "auth": {
-#         "name": "Admin Users",
-#         "icon": "fas fa-user-shield"
-#     }
-# },
+        "pos.Customer",
+        "pos.Supplier",
+        "pos.Product",
+        "pos.Order",
+        "pos.OrderItem",
+        "pos.Expense",
+        "pos.Category",
+        "pos.Unit",
+        "pos.Shop",
+        "pos.Banner",
+        "auth.Group",
+        "pos.CustomUser",
+        "pos.TokenProxy",  # ✅ opsional
+    ],
+
+    # ✅ Hilangkan grup "Auth" dan "Auth Token" dari atas
+    "hide_apps": ["auth", "authtoken"],
+    "hide_models": ["auth.User", "auth.Group"],
+
+    "show_ui_builder": False,
+
     "topmenu_links": [
         {"name": "Dashboard", "url": "/admin", "permissions": ["auth.view_user"]},
-        {"model": "auth.User"},
-        {"name": "Logout", "url": "/admin/logout/", "new_window": False},
+        {"model": "pos.CustomUser"},
+        # {"name": "Logout", "url": "/admin/logout/", "new_window": False},
     ],
-    "side_menu": [
-    {"app": "pos", "label": "Customers", "models": ["pos.Customer"]},
-    {"app": "pos", "label": "Suppliers", "models": ["pos.Supplier"]},
-    {"app": "pos", "label": "Products Category", "models": ["pos.Category"]},
-    {"app": "pos", "label": "Products", "models": ["pos.Product"]},
-    {"app": "pos", "label": "Orders", "models": ["pos.Order"]},
-    {"app": "pos", "label": "Expense", "models": ["pos.Expense"]},
-    {
-        "label": "Reports",
-        "icon": "fas fa-chart-line",
-        "models": [
-            {"name": "Sales Report", "url": "/reports/sales/"},
-            {"name": "Expense Report", "url": "/reports/expense/"},
-            {"name": "Sales Chart", "url": "/reports/sales-chart/"},
-            {"name": "Expense Chart", "url": "/reports/expense-chart/"},
-        ]
-    },
-    {
-        "label": "Settings",
-        "icon": "fas fa-cogs",
-        "models": [
-            "pos.Shop",
-            "pos.Unit",
-        ]
-    },
-    {
-        "app": "auth",
-        "label": "Admin Users",
-        "icon": "fas fa-user-shield",
-        "models": ["auth.Group", "auth.User"]
-    }
- ],
-}
 
+    "side_menu": [
+        {"app": "pos", "label": "Customers", "models": ["pos.Customer"]},
+        {"app": "pos", "label": "Suppliers", "models": ["pos.Supplier"]},
+        {"app": "pos", "label": "Products Category", "models": ["pos.Category"]},
+        {"app": "pos", "label": "Products", "models": ["pos.Product"]},
+        {"app": "pos", "label": "Orders", "models": ["pos.Order"]},
+        {"app": "pos", "label": "Expense", "models": ["pos.Expense"]},
+        {"app": "pos", "label": "Banners", "models": ["pos.Banner"]},
+
+        {
+            "label": "Reports",
+            "icon": "fas fa-chart-line",
+            "models": [
+                {"name": "Sales Report", "url": "/admin/reports/sales/"},
+                {"name": "Expense Report", "url": "/admin/reports/expense/"},
+                {"name": "Sales Chart", "url": "/admin/reports/sales-chart/"},
+                {"name": "Expense Chart", "url": "/admin/reports/expense-chart/"},
+            ],
+        },
+        {
+            "label": "Settings",
+            "icon": "fas fa-cogs",
+            "models": [
+                "pos.Shop",
+                "pos.Unit",
+            ],
+        },
+        {
+            "label": "Admin Users",
+            "icon": "fas fa-user-shield",
+            "models": [
+                "auth.Group",
+                "pos.CustomUser",
+
+                # ✅ Tokens sekarang dari Proxy Model (muncul di bawah)
+                "pos.TokenProxy",
+            ],
+        },
+    ],
+}

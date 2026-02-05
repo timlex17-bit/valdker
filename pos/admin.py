@@ -1,7 +1,7 @@
 from django.urls import reverse
 from django.utils.html import format_html
 from .models import Banner
-
+from .models import TokenProxy
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from .models import CustomUser
@@ -48,8 +48,14 @@ class OrderAdmin(admin.ModelAdmin):
         return obj.created_at.strftime("%I:%M %p, %d %B, %Y")
     created_at_formatted.short_description = 'Time'
 
+    # ✅ DIUBAH: tampilkan full_name jika ada, fallback ke username
     def served_by(self, obj):
-        return obj.served_by.username if obj.served_by else "-"
+        if not obj.served_by:
+            return "-"
+        full_name = getattr(obj.served_by, "full_name", None)
+        if full_name:
+            return full_name
+        return obj.served_by.username
     served_by.short_description = 'Served By'
 
     def receipt_link(self, obj):
@@ -67,7 +73,19 @@ class OrderAdmin(admin.ModelAdmin):
         if not obj.served_by_id:
             obj.served_by = request.user
         super().save_model(request, obj, form, change)
-        
+
+    # ✅ TAMBAH: pastikan served_by tetap terset walau edit lewat inline/formset
+    def save_formset(self, request, form, formset, change):
+        instances = formset.save(commit=False)
+        for instance in instances:
+            instance.save()
+        formset.save_m2m()
+
+        # pastikan object utama juga tetap punya served_by
+        if hasattr(form, "instance") and getattr(form.instance, "served_by_id", None) is None:
+            form.instance.served_by = request.user
+            form.instance.save()
+
 
 @admin.register(Banner)
 class BannerAdmin(admin.ModelAdmin):
@@ -90,3 +108,9 @@ class CustomUserAdmin(UserAdmin):
     )
 
 admin.site.register(CustomUser, CustomUserAdmin)
+
+@admin.register(TokenProxy)
+class TokenProxyAdmin(admin.ModelAdmin):
+    list_display = ("key", "user", "created")
+    search_fields = ("key", "user__username", "user__email")
+    ordering = ("-created",)

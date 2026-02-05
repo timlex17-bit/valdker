@@ -4,6 +4,11 @@ from django.http import HttpResponse
 from .models import Expense
 from rest_framework.viewsets import ModelViewSet
 
+from django.contrib.auth import authenticate
+from rest_framework.permissions import AllowAny
+from rest_framework.authtoken.models import Token
+from rest_framework.decorators import api_view, permission_classes
+
 from django.db.models.functions import TruncMonth
 from django.db.models import Sum
 from .models import Shop
@@ -24,6 +29,12 @@ from .serializers import (
     ProductSerializer, CategorySerializer, UnitSerializer
 )
 from .decorators import role_required  # ✅ Dekorator for role-based access
+
+# ✅ TAMBAH: untuk context admin Jazzmin
+from django.contrib import admin as django_admin
+
+from django.template import TemplateDoesNotExist
+
 
 # API ViewSets
 class CustomerViewSet(viewsets.ModelViewSet):
@@ -56,6 +67,30 @@ class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all().order_by('-created_at')
     serializer_class = OrderSerializer
 
+
+# ✅ Helper: supaya semua report selalu “nyatu” dengan Jazzmin
+def _admin_context(request, title: str):
+    ctx = django_admin.site.each_context(request)
+    ctx["title"] = title
+    return ctx
+
+
+# ✅ Helper: render template dengan fallback (kalau nama file template berbeda)
+def _render_with_fallback(request, templates, context):
+    """
+    templates: list template candidates, contoh:
+      ["pos/expense_chart.html", "pos/expense_cart.html"]
+    """
+    last_err = None
+    for tpl in templates:
+        try:
+            return render(request, tpl, context)
+        except TemplateDoesNotExist as e:
+            last_err = e
+            continue
+    raise last_err
+
+
 # View normal ho asesu espesífiku role
 @role_required(['admin', 'manager', 'cashier'])
 def sales_report_view(request):
@@ -78,15 +113,16 @@ def sales_report_view(request):
             'order_date': item.order.created_at.strftime("%d %B, %Y"),
         })
 
-    context = {
-        'rows': rows
-    }
+    context = _admin_context(request, "Sales Report")
+    context.update({'rows': rows})
     return render(request, 'pos/sales_report.html', context)
 
 
 def pos_kasir_view(request):
     return render(request, 'pos/pos_kasir.html')
 
+# NOTE: ini duplicate dengan fungsi di atas, sesuai permintaan kamu saya tidak hapus.
+# Python akan memakai definisi yang terakhir ini.
 def pos_kasir_view(request):
     from .models import Product
 
@@ -94,7 +130,6 @@ def pos_kasir_view(request):
     cart = request.session.get('cart', [])
 
     if request.method == 'POST':
-        # Aumenta ba karosa kompra
         product_id = request.POST.get('product_id')
         quantity = int(request.POST.get('quantity', 1))
 
@@ -108,7 +143,6 @@ def pos_kasir_view(request):
         request.session['cart'] = cart
         return redirect('pos_kasir')
 
-    # Hamosu produtu hotu-hotu iha karosa kompra
     cart_items = []
     total = 0
     for item in cart:
@@ -144,7 +178,7 @@ def pos_checkout(request):
         payment_method = request.POST.get('payment_method')
 
         order = Order.objects.create(
-            customer=None,  # Depois bele hili kliente
+            customer=None,
             payment_method=payment_method,
             subtotal=0,
             discount=0,
@@ -159,6 +193,30 @@ def pos_checkout(request):
         for item in cart:
             product = Product.objects.get(id=item['product_id'])
             quantity = item['quantity']
+
+            # ✅ VALIDASI HARGA (WAJIB) — stop checkout kalau harga belum di-set
+            if product.sell_price <= 0:
+                # hitung cart_items + total supaya halaman kasir tetap tampil lengkap
+                products = Product.objects.all()
+                cart_items = []
+                total = 0
+                for c in cart:
+                    p = Product.objects.get(id=c['product_id'])
+                    sub = p.sell_price * c['quantity']
+                    total += sub
+                    cart_items.append({
+                        'product': p,
+                        'quantity': c['quantity'],
+                        'subtotal': sub
+                    })
+
+                return render(request, 'pos/pos_kasir.html', {
+                    'products': products,
+                    'cart_items': cart_items,
+                    'total': total,
+                    'error': f"Harga produk '{product.name}' belum di-set. Hubungi admin."
+                })
+
             OrderItem.objects.create(
                 order=order,
                 product=product,
@@ -170,7 +228,7 @@ def pos_checkout(request):
             product.save()
             subtotal += product.sell_price * quantity
 
-        tax = 0  # bele halo 10% karik bele aumenta
+        tax = 0
         discount = 0
         total = subtotal + tax - discount
 
@@ -180,19 +238,37 @@ def pos_checkout(request):
         order.total = total
         order.save()
 
-        # Hamamuk karosa kompra
         request.session['cart'] = []
-
         return redirect('pos_kasir')
 
     return redirect('pos_kasir')
 
 def order_receipt_pdf(request, order_id):
-    order = get_object_or_404(Order.objects.prefetch_related('items__product', 'served_by'), id=order_id)
-    shop = Shop.objects.first()  # Foti informasaun loja
+    order = get_object_or_404(
+        Order.objects.prefetch_related('items__product', 'items__weight_unit').select_related('served_by'),
+        id=order_id
+    )
+    shop = Shop.objects.first()
+
+    # ✅ hitung aman (pakai price yang tersimpan di OrderItem)
+    receipt_items = []
+    for item in order.items.all():
+        unit_price = item.price or 0
+        line_total = (item.quantity or 0) * unit_price
+
+        receipt_items.append({
+            "name": item.product.name if item.product else "-",
+            "qty": item.quantity or 0,
+            "unit_price": unit_price,
+            "line_total": line_total,
+        })
 
     template = get_template('pos/order_receipt.html')
-    html = template.render({'order': order, 'shop': shop})
+    html = template.render({
+        'order': order,
+        'shop': shop,
+        'receipt_items': receipt_items,  # ✅ kirim list yang sudah benar
+    })
 
     result = io.BytesIO()
     pdf = pisa.pisaDocument(io.BytesIO(html.encode('UTF-8')), result)
@@ -201,32 +277,76 @@ def order_receipt_pdf(request, order_id):
         return HttpResponse(result.getvalue(), content_type='application/pdf')
     else:
         return HttpResponse('Error generating PDF', status=500)
-    
 
-@role_required(['admin', 'manager'])
+
+# ✅ DIUBAH: tambahkan 'cashier' supaya tidak redirect ke dashboard
+@role_required(['admin', 'manager', 'cashier'])
 def expense_report_view(request):
     expenses = Expense.objects.all().order_by('-date', '-time')
-    return render(request, 'pos/expense_report.html', {'expenses': expenses})
+    context = _admin_context(request, "Expense Report")
+    context.update({'expenses': expenses})
+    return render(request, 'pos/expense_report.html', context)
 
-# ➔ Expense Chart (Gráfiku gastu mensál)
-@role_required(['admin', 'manager'])
+
+# ✅ DIUBAH: tambahkan 'cashier'
+@role_required(['admin', 'manager', 'cashier'])
 def expense_chart_view(request):
     data = (
         Expense.objects
-        .annotate(month=TruncMonth('date'))  # Grupu tuir fulan
+        .annotate(month=TruncMonth('date'))
         .values('month')
         .annotate(total=Sum('amount'))
         .order_by('month')
     )
 
-    labels = [d['month'].strftime('%B %Y') for d in data]
-    totals = [float(d['total']) for d in data]
+    labels = [d['month'].strftime('%B %Y') for d in data if d['month']]
+    totals = [float(d['total']) for d in data if d['month']]
 
-    return render(request, 'pos/expense_chart.html', {
-        'labels': labels,
-        'totals': totals
-    })    
-    
+    context = _admin_context(request, "Expense Chart")
+    context.update({'labels': labels, 'totals': totals})
+
+    return _render_with_fallback(
+        request,
+        ["pos/expense_chart.html", "pos/expense_cart.html"],
+        context
+    )
+
+
+# ✅ DIUBAH: tambahkan 'cashier'
+@role_required(['admin', 'manager', 'cashier'])
+def sales_chart_view(request):
+    data = (
+        OrderItem.objects
+        .annotate(month=TruncMonth('order__created_at'))
+        .values('month')
+        .annotate(total=Sum('price'))
+        .order_by('month')
+    )
+
+    labels = [d['month'].strftime('%B %Y') for d in data if d['month']]
+    sales = [float(d['total']) for d in data if d['month']]
+
+    total_order_price = sum(sales)
+    total_tax = 0
+    total_discount = 0
+    net_sales = total_order_price - total_discount
+
+    context = _admin_context(request, "Sales Chart")
+    context.update({
+        "labels": labels,
+        "sales": sales,
+        "total_order_price": total_order_price,
+        "total_tax": total_tax,
+        "total_discount": total_discount,
+        "net_sales": net_sales,
+    })
+
+    return _render_with_fallback(
+        request,
+        ["pos/sales_chart.html", "pos/sales_cart.html"],
+        context
+    )
+
 
 class BannerListView(APIView):
     def get(self, request):
@@ -236,4 +356,41 @@ class BannerListView(APIView):
     
 class BannerViewSet(ModelViewSet):
     queryset = Banner.objects.all()
-    serializer_class = BannerSerializer    
+    serializer_class = BannerSerializer
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def api_login(request):
+    # ✅ Aman untuk JSON / form-data
+    username = (request.data.get("username") or "").strip()
+    password = request.data.get("password") or ""
+
+    # ✅ Validasi input biar jelas kalau request kosong
+    if not username or not password:
+        return Response(
+            {"detail": "username dan password wajib diisi"},
+            status=400
+        )
+
+    # ✅ Pakai request biar auth backend konsisten
+    user = authenticate(request, username=username, password=password)
+    if not user:
+        return Response(
+            {"detail": "Username atau password salah"},
+            status=401
+        )
+
+    token, _ = Token.objects.get_or_create(user=user)
+
+    return Response({
+        "token": token.key,
+        "user": {
+            "id": user.id,
+            "username": user.get_username(),
+            "full_name": getattr(user, "full_name", "") or "",
+            "role": getattr(user, "role", "") or "",
+            "is_staff": getattr(user, "is_staff", False),
+            "is_superuser": getattr(user, "is_superuser", False),
+        }
+    }, status=200)

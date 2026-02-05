@@ -1,6 +1,11 @@
 from rest_framework import serializers
-from .models import Order, OrderItem
-from .models import Customer, Supplier, Product, Category, Unit, Banner
+from django.db import transaction
+from django.db.models import F
+
+from .models import (
+    Customer, Supplier, Product, Category, Unit, Banner,
+    Order, OrderItem
+)
 
 class CustomerSerializer(serializers.ModelSerializer):
     class Meta:
@@ -14,11 +19,11 @@ class SupplierSerializer(serializers.ModelSerializer):
 
 class CategorySerializer(serializers.ModelSerializer):
     icon_url = serializers.SerializerMethodField()
-    
+
     class Meta:
         model = Category
         fields = ['id', 'name', 'icon_url']
-        
+
     def get_icon_url(self, obj):
         request = self.context.get('request')
         if obj.icon and request:
@@ -35,16 +40,19 @@ class ProductSerializer(serializers.ModelSerializer):
     image = serializers.ImageField(use_url=True)
     category = CategorySerializer(read_only=True)
     category_id = serializers.PrimaryKeyRelatedField(
-        queryset=Category.objects.all(), source='category', write_only=True)
+        queryset=Category.objects.all(), source='category', write_only=True
+    )
 
     supplier = SupplierSerializer(read_only=True)
     supplier_id = serializers.PrimaryKeyRelatedField(
-        queryset=Supplier.objects.all(), source='supplier', write_only=True)
+        queryset=Supplier.objects.all(), source='supplier', write_only=True
+    )
 
     unit = UnitSerializer(read_only=True)
     unit_id = serializers.PrimaryKeyRelatedField(
-        queryset=Unit.objects.all(), source='unit', write_only=True)
-    
+        queryset=Unit.objects.all(), source='unit', write_only=True
+    )
+
     def get_image_url(self, obj):
         request = self.context.get('request')
         if obj.image and request:
@@ -60,6 +68,16 @@ class ProductSerializer(serializers.ModelSerializer):
         ]
 
 class OrderItemSerializer(serializers.ModelSerializer):
+    # ✅ pastikan product diterima sebagai PK
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+
+    # ✅ weight_unit FK: boleh null & optional
+    weight_unit = serializers.PrimaryKeyRelatedField(
+        queryset=Unit.objects.all(),
+        required=False,
+        allow_null=True
+    )
+
     class Meta:
         model = OrderItem
         fields = ['product', 'quantity', 'price', 'weight_unit']
@@ -73,23 +91,41 @@ class OrderSerializer(serializers.ModelSerializer):
             'id', 'customer', 'created_at', 'payment_method', 'subtotal',
             'discount', 'tax', 'total', 'notes', 'is_paid', 'items'
         ]
+        read_only_fields = ['id', 'created_at']  # ✅ penting
 
+    def validate(self, attrs):
+        items = attrs.get("items") or []
+        if len(items) == 0:
+            raise serializers.ValidationError({"items": "Items tidak boleh kosong."})
+        return attrs
+
+    @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop('items')
         order = Order.objects.create(**validated_data)
 
         for item_data in items_data:
-            # Hamenus stok produtu
             product = item_data['product']
-            quantity = item_data['quantity']
-            product.stock -= quantity
-            product.save()
+            quantity = int(item_data['quantity'])
 
-            # Salva item order
+            # ✅ lock product row (SQLite memang terbatas tapi tetap aman dengan atomic)
+            # Kalau pakai Postgres, ini sangat membantu
+            product.refresh_from_db()
+
+            # ✅ Validasi stok jangan sampai minus
+            if product.stock < quantity:
+                raise serializers.ValidationError({
+                    "stock": f"Stok {product.name} tidak cukup. Sisa {product.stock}, minta {quantity}"
+                })
+
+            # ✅ stok berkurang
+            Product.objects.filter(id=product.id).update(stock=F('stock') - quantity)
+
+            # ✅ create order item
             OrderItem.objects.create(order=order, **item_data)
 
         return order
-    
+
 class BannerSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
 
@@ -102,5 +138,3 @@ class BannerSerializer(serializers.ModelSerializer):
         if obj.image and request:
             return request.build_absolute_uri(obj.image.url)
         return None
-
-    

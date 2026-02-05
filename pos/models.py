@@ -1,5 +1,6 @@
 from django.db import models
 from django.conf import settings
+from rest_framework.authtoken.models import Token
 from django.contrib.auth.models import AbstractUser
 
 
@@ -140,3 +141,9 @@ class Banner(models.Model):
     def __str__(self):
         return self.title
     
+class TokenProxy(Token):
+    class Meta:
+        proxy = True
+        app_label = "pos"
+        verbose_name = "Token"
+        verbose_name_plural = "Tokens"

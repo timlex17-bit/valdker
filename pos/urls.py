@@ -1,10 +1,16 @@
 from django.urls import path, include
-from .views import OrderViewSet
-from .views import BannerViewSet
-
-from .views import BannerListView
 from rest_framework.routers import DefaultRouter
-from .views import CustomerViewSet, SupplierViewSet, ProductViewSet, CategoryViewSet, UnitViewSet
+
+from . import views
+from .views import (
+    OrderViewSet,
+    BannerViewSet,
+    CustomerViewSet,
+    SupplierViewSet,
+    ProductViewSet,
+    CategoryViewSet,
+    UnitViewSet,
+)
 
 router = DefaultRouter()
 router.register(r'customers', CustomerViewSet)
@@ -16,5 +22,10 @@ router.register(r'units', UnitViewSet)
 router.register(r'orders', OrderViewSet)
 
 urlpatterns = [
-    path('', include(router.urls)),
+    # 🔐 LOGIN API (terima dengan slash & tanpa slash)
+    path("auth/login/", views.api_login, name="api_login"),
+    path("auth/login", views.api_login, name="api_login_noslash"),
+
+    # 🔁 API CRUD (router)
+    path("", include(router.urls)),
 ]

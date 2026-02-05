@@ -1,8 +1,18 @@
-# .gitignore
-venv/
+# Python
 __pycache__/
-*.pyc
-*.pyo
-*.sqlite3
+*.py[cod]
+
+# Django
+db.sqlite3
 media/
-.env
+staticfiles/
+
+# Virtualenv
+venv/
+venv310/
+
+# OS / Editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
