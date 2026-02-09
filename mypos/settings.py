@@ -12,13 +12,14 @@ https://docs.djangoproject.com/en/5.0/ref/settings/
 
 from pathlib import Path
 from corsheaders.defaults import default_headers
+import dj_database_url
 import os
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = "django-insecure-*1-$iq=etsqtx$pk0(aw-k+mq-o0imul3$umeu*$$#i@zskb%e"
 
-DEBUG = True
+DEBUG = os.environ.get("DEBUG", "0") == "1"
 
 # ✅ Host yang boleh akses Django
 ALLOWED_HOSTS = [
@@ -38,11 +39,9 @@ ALLOWED_HOSTS = [
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "http://192.168.1.101:5173",
 
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
-    "http://192.168.1.101:8000",
+    "https://valdker-vue-js.vercel.app",
+    "https://valdker.onrender.com",
 ]
 
 INSTALLED_APPS = [
@@ -145,12 +144,24 @@ CORS_ALLOW_CREDENTIALS = False
 # =========================
 # DATABASE
 # =========================
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.sqlite3",
+#         "NAME": BASE_DIR / "db.sqlite3",
+#     }
+# }
+
+# =========================
+# DATABASE RENDER
+# =========================
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.sqlite3",
-        "NAME": BASE_DIR / "db.sqlite3",
-    }
+    "default": dj_database_url.config(
+        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
+        conn_max_age=600,
+        ssl_require=not DEBUG,  # prod wajib ssl
+    )
 }
+
 
 # =========================
 # TEMPLATES
