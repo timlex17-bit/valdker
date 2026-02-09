@@ -1,6 +1,6 @@
 """
 Django settings for mypos project.
-Cloudinary + Render READY
+Cloudinary + Render READY (SQLite local safe)
 """
 
 from pathlib import Path
@@ -13,19 +13,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # =====================================================
 # BASIC
 # =====================================================
-SECRET_KEY = os.environ.get(
-    "SECRET_KEY",
-    "django-insecure-dev-key"
-)
-
+SECRET_KEY = os.environ.get("SECRET_KEY", "django-insecure-dev-key")
 DEBUG = os.environ.get("DEBUG", "0") == "1"
 
 ALLOWED_HOSTS = [
     "localhost",
     "127.0.0.1",
     "0.0.0.0",
-
-    # Render
     "valdker.onrender.com",
 ]
 
@@ -40,13 +34,10 @@ CSRF_TRUSTED_ORIGINS = [
 # APPLICATIONS
 # =====================================================
 INSTALLED_APPS = [
-    # UI
     "jazzmin",
-
-    # Local app
     "pos",
 
-    # Cloudinary (WAJIB urutan ini)
+    # Cloudinary
     "cloudinary",
     "cloudinary_storage",
 
@@ -86,7 +77,6 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "whitenoise.middleware.WhiteNoiseMiddleware",
 
-    # CORS harus sebelum CommonMiddleware
     "corsheaders.middleware.CorsMiddleware",
 
     "django.contrib.sessions.middleware.SessionMiddleware",
@@ -101,15 +91,27 @@ ROOT_URLCONF = "mypos.urls"
 WSGI_APPLICATION = "mypos.wsgi.application"
 
 # =====================================================
-# DATABASE (Render / Local auto)
+# DATABASE (✅ FIX: SQLite local jangan pakai sslmode)
 # =====================================================
-DATABASES = {
-    "default": dj_database_url.config(
-        default=f"sqlite:///{BASE_DIR / 'db.sqlite3'}",
-        conn_max_age=600,
-        ssl_require=not DEBUG,
-    )
-}
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+
+if DATABASE_URL:
+    # Render / production
+    DATABASES = {
+        "default": dj_database_url.parse(
+            DATABASE_URL,
+            conn_max_age=600,
+            ssl_require=not DEBUG,  # aman untuk Postgres/MySQL
+        )
+    }
+else:
+    # Local Windows SQLite
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
+    }
 
 # =====================================================
 # CORS
@@ -126,18 +128,9 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https:\/\/.*\.vercel\.app$",
 ]
 
-CORS_ALLOW_METHODS = [
-    "DELETE",
-    "GET",
-    "OPTIONS",
-    "PATCH",
-    "POST",
-    "PUT",
-]
+CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
 
-CORS_ALLOW_HEADERS = list(default_headers) + [
-    "authorization",
-]
+CORS_ALLOW_HEADERS = list(default_headers) + ["authorization"]
 
 CORS_ALLOW_CREDENTIALS = False
 
@@ -177,19 +170,15 @@ STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # =====================================================
-# CLOUDINARY (MEDIA STORAGE FINAL)
+# CLOUDINARY (✅ ENV name harus benar)
 # =====================================================
 DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
 
 CLOUDINARY_STORAGE = {
-    "CLOUD_NAME": os.environ.get("dxukb1kv7"),
-    "API_KEY": os.environ.get("232616766575217"),
-    "API_SECRET": os.environ.get("wnxUdE2uoo1fhwGLr77geaD1plo"),
+    "CLOUD_NAME": os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    "API_KEY": os.environ.get("CLOUDINARY_API_KEY"),
+    "API_SECRET": os.environ.get("CLOUDINARY_API_SECRET"),
 }
-
-# ⚠️ JANGAN pakai MEDIA_ROOT / MEDIA_URL lagi
-# MEDIA_URL ❌
-# MEDIA_ROOT ❌
 
 # =====================================================
 # DEFAULT PK
@@ -204,35 +193,8 @@ JAZZMIN_SETTINGS = {
     "site_header": "MyPOS Admin Panel",
     "site_brand": "MyPOS",
     "welcome_sign": "Selamat Datang di MyPOS",
-
     "show_sidebar": True,
     "navigation_expanded": True,
-
     "custom_css": "admin/css/force_jazzmin_sidebar.css",
     "custom_js": "admin/js/force_sidebar_open.js",
-
-    "icons": {
-        "pos.Customer": "fas fa-user",
-        "pos.Supplier": "fas fa-users-cog",
-        "pos.Category": "fas fa-boxes",
-        "pos.Product": "fas fa-box-open",
-        "pos.Order": "fas fa-shopping-cart",
-        "pos.Expense": "fas fa-coins",
-        "pos.CustomUser": "fas fa-user-shield",
-        "pos.Banner": "fas fa-image",
-        "pos.TokenProxy": "fas fa-key",
-    },
-
-    "hide_apps": ["auth", "authtoken"],
-    "hide_models": ["auth.User", "auth.Group"],
-
-    "side_menu": [
-        {"app": "pos", "label": "Customers", "models": ["pos.Customer"]},
-        {"app": "pos", "label": "Suppliers", "models": ["pos.Supplier"]},
-        {"app": "pos", "label": "Categories", "models": ["pos.Category"]},
-        {"app": "pos", "label": "Products", "models": ["pos.Product"]},
-        {"app": "pos", "label": "Orders", "models": ["pos.Order"]},
-        {"app": "pos", "label": "Expense", "models": ["pos.Expense"]},
-        {"app": "pos", "label": "Banners", "models": ["pos.Banner"]},
-    ],
 }
