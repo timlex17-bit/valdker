@@ -47,6 +47,10 @@ CSRF_TRUSTED_ORIGINS = [
 INSTALLED_APPS = [
     "jazzmin",
     "pos",
+    
+     # ✅ cloudinary
+    "cloudinary",
+    "cloudinary_storage",
 
     # ✅ third party
     "corsheaders",
@@ -198,8 +202,18 @@ STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
 STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
-MEDIA_URL = "/media/"
-MEDIA_ROOT = BASE_DIR / "media"
+
+DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": os.environ.get("dxukb1kv7"),
+    "API_KEY": os.environ.get("232616766575217"),
+    "API_SECRET": os.environ.get("**********"),
+}
+
+
+# MEDIA_URL = "/media/"
+# MEDIA_ROOT = BASE_DIR / "media"
 
 # Default PK
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
