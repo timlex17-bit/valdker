@@ -1,6 +1,6 @@
 """
 Django settings for mypos project.
-Cloudinary + Render READY (Django 5)
+Cloudinary + Render READY (SQLite local safe)
 """
 
 from pathlib import Path
@@ -37,7 +37,7 @@ INSTALLED_APPS = [
     "jazzmin",
     "pos",
 
-    # Cloudinary (WAJIB)
+    # Cloudinary
     "cloudinary",
     "cloudinary_storage",
 
@@ -91,36 +91,47 @@ ROOT_URLCONF = "mypos.urls"
 WSGI_APPLICATION = "mypos.wsgi.application"
 
 # =====================================================
-# DATABASE (Render / Local auto)
+# DATABASE (✅ FIX: SQLite local jangan pakai sslmode)
 # =====================================================
-DATABASE_URL = os.environ.get("DATABASE_URL", f"sqlite:///{BASE_DIR / 'db.sqlite3'}")
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
 
-# Jangan pakai ssl_require untuk sqlite (biar tidak error sslmode)
-if DATABASE_URL.startswith("sqlite"):
-    DATABASES = {"default": dj_database_url.parse(DATABASE_URL)}
-else:
+if DATABASE_URL:
+    # Render / production
     DATABASES = {
         "default": dj_database_url.parse(
             DATABASE_URL,
             conn_max_age=600,
-            ssl_require=not DEBUG,
+            ssl_require=not DEBUG,  # aman untuk Postgres/MySQL
         )
+    }
+else:
+    # Local Windows SQLite
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": BASE_DIR / "db.sqlite3",
+        }
     }
 
 # =====================================================
 # CORS
 # =====================================================
 CORS_ALLOW_ALL_ORIGINS = False
+
 CORS_ALLOWED_ORIGINS = [
     "https://valdker-vue-js.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
 ]
+
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https:\/\/.*\.vercel\.app$",
 ]
+
 CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
+
 CORS_ALLOW_HEADERS = list(default_headers) + ["authorization"]
+
 CORS_ALLOW_CREDENTIALS = False
 
 # =====================================================
@@ -152,42 +163,30 @@ USE_I18N = True
 USE_TZ = True
 
 # =====================================================
-# STATIC FILES (WhiteNoise)
+# STATIC FILES
 # =====================================================
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
-
-# Django 5 recommended (STORAGES)
-STORAGES = {
-    "default": {
-        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
-    },
-    "staticfiles": {
-        "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
-    },
-}
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # =====================================================
-# CLOUDINARY (WAJIB ambil dari ENV Render)
+# CLOUDINARY (✅ ENV name harus benar)
 # =====================================================
+DEFAULT_FILE_STORAGE = "cloudinary_storage.storage.MediaCloudinaryStorage"
+
 CLOUDINARY_STORAGE = {
-    "CLOUD_NAME": os.environ.get("CLOUDINARY_CLOUD_NAME", ""),
-    "API_KEY": os.environ.get("CLOUDINARY_API_KEY", ""),
-    "API_SECRET": os.environ.get("CLOUDINARY_API_SECRET", ""),
+    "CLOUD_NAME": os.environ.get("CLOUDINARY_CLOUD_NAME"),
+    "API_KEY": os.environ.get("CLOUDINARY_API_KEY"),
+    "API_SECRET": os.environ.get("CLOUDINARY_API_SECRET"),
 }
 
-# Safety check (biar gampang debug kalau ENV belum kebaca)
-if not CLOUDINARY_STORAGE["CLOUD_NAME"]:
-    print("⚠️ CLOUDINARY_CLOUD_NAME belum diset di ENV")
-if not CLOUDINARY_STORAGE["API_KEY"]:
-    print("⚠️ CLOUDINARY_API_KEY belum diset di ENV")
-if not CLOUDINARY_STORAGE["API_SECRET"]:
-    print("⚠️ CLOUDINARY_API_SECRET belum diset di ENV")
-
+# =====================================================
+# DEFAULT PK
+# =====================================================
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 # =====================================================
-# JAZZMIN (punya kamu, aku biarkan ringkas)
+# JAZZMIN
 # =====================================================
 JAZZMIN_SETTINGS = {
     "site_title": "MyPOS Admin",
@@ -196,7 +195,6 @@ JAZZMIN_SETTINGS = {
     "welcome_sign": "Selamat Datang di MyPOS",
     "show_sidebar": True,
     "navigation_expanded": True,
-
     "custom_css": "admin/css/force_jazzmin_sidebar.css",
     "custom_js": "admin/js/force_sidebar_open.js",
 }
