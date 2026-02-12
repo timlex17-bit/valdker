@@ -15,17 +15,14 @@ from .views import (
 router = DefaultRouter()
 router.register(r'customers', CustomerViewSet)
 router.register(r'suppliers', SupplierViewSet)
-router.register(r'products', ProductViewSet)
+router.register(r'products', ProductViewSet)  
 router.register(r'categories', CategoryViewSet)
 router.register(r'banners', BannerViewSet)
 router.register(r'units', UnitViewSet)
 router.register(r'orders', OrderViewSet)
 
 urlpatterns = [
-    # 🔐 LOGIN API (terima dengan slash & tanpa slash)
     path("auth/login/", views.api_login, name="api_login"),
     path("auth/login", views.api_login, name="api_login_noslash"),
-
-    # 🔁 API CRUD (router)
     path("", include(router.urls)),
 ]

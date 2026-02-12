@@ -58,20 +58,19 @@ class UnitViewSet(viewsets.ModelViewSet):
     serializer_class = UnitSerializer
 
 class ProductViewSet(viewsets.ModelViewSet):
+    queryset = Product.objects.all().order_by("-id")  
     serializer_class = ProductSerializer
 
     def get_queryset(self):
         qs = Product.objects.select_related("category", "supplier", "unit").order_by("-id")
 
-        # ✅ filter kategori (Opsi A)
         category = self.request.query_params.get("category")
         if category and str(category).lower() != "all":
             try:
                 qs = qs.filter(category_id=int(category))
             except (ValueError, TypeError):
-                pass  # kalau category bukan angka, abaikan
+                pass
 
-        # ✅ optional: search by name/code
         search = self.request.query_params.get("search")
         if search:
             s = search.strip()
