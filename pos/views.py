@@ -65,7 +65,7 @@ class ProductViewSet(viewsets.ModelViewSet):
         qs = Product.objects.select_related("category", "supplier", "unit").order_by("-id")
 
         category = self.request.query_params.get("category")
-        if category and str(category).lower() != "all":
+        if category and str(category).lower() not in ("all", "-1"):
             try:
                 qs = qs.filter(category_id=int(category))
             except (ValueError, TypeError):
