@@ -141,16 +141,10 @@ class BannerSerializer(serializers.ModelSerializer):
 
 class ShopSerializer(serializers.ModelSerializer):
     logo_url = serializers.SerializerMethodField()
-    all_category_icon_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Shop
-        fields = [
-            "id",
-            "name",
-            "logo_url",
-            "all_category_icon_url"
-        ]
+        fields = ["id", "name", "address", "phone", "email", "logo_url"]
 
     def get_logo_url(self, obj):
         request = self.context.get("request")
@@ -158,9 +152,4 @@ class ShopSerializer(serializers.ModelSerializer):
             return request.build_absolute_uri(obj.logo.url)
         return None
 
-    def get_all_category_icon_url(self, obj):
-        request = self.context.get("request")
-        if obj.all_category_icon and request:
-            return request.build_absolute_uri(obj.all_category_icon.url)
-        return None
 
