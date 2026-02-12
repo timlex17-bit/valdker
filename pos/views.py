@@ -23,13 +23,13 @@ import io
 from xhtml2pdf import pisa
 from django.shortcuts import get_object_or_404
 from .models import (
-    Order, OrderItem, Customer, Supplier, Product, Category, Unit, Banner
+    Order, OrderItem, Customer, Supplier, Product, Category, Unit, Banner, Shop
 )
 from .serializers import (
     OrderSerializer, CustomerSerializer, SupplierSerializer,
-    ProductSerializer, CategorySerializer, UnitSerializer
+    ProductSerializer, CategorySerializer, UnitSerializer, ShopSerializer
 )
-from .decorators import role_required  # ✅ Dekorator for role-based access
+from .decorators import role_required  
 
 # ✅ TAMBAH: untuk context admin Jazzmin
 from django.contrib import admin as django_admin
@@ -413,3 +413,14 @@ def api_login(request):
             "is_superuser": getattr(user, "is_superuser", False),
         }
     }, status=200)
+
+
+class ShopPublicView(APIView):
+    def get(self, request):
+        shop = Shop.objects.first()
+        if not shop:
+            return Response({}, status=200)
+
+        serializer = ShopSerializer(shop, context={"request": request})
+        return Response(serializer.data)
+

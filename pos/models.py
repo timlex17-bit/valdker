@@ -139,8 +139,7 @@ class Shop(models.Model):
     email = models.EmailField(blank=True, null=True)
     logo = CloudinaryField("shop_logo", blank=True, null=True)
 
-    def __str__(self):
-        return self.name
+    all_category_icon = CloudinaryField("all_category_icon", blank=True, null=True)
 
 
 # ========== BANNER ==========

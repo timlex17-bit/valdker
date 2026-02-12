@@ -24,5 +24,6 @@ router.register(r'orders', OrderViewSet)
 urlpatterns = [
     path("auth/login/", views.api_login, name="api_login"),
     path("auth/login", views.api_login, name="api_login_noslash"),
+    path("shop/", views.ShopPublicView.as_view()),
     path("", include(router.urls)),
 ]

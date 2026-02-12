@@ -4,7 +4,7 @@ from django.db.models import F
 
 from .models import (
     Customer, Supplier, Product, Category, Unit, Banner,
-    Order, OrderItem
+    Order, OrderItem, Shop
 )
 
 class CustomerSerializer(serializers.ModelSerializer):
@@ -138,3 +138,29 @@ class BannerSerializer(serializers.ModelSerializer):
         if obj.image and request:
             return request.build_absolute_uri(obj.image.url)
         return None
+
+class ShopSerializer(serializers.ModelSerializer):
+    logo_url = serializers.SerializerMethodField()
+    all_category_icon_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Shop
+        fields = [
+            "id",
+            "name",
+            "logo_url",
+            "all_category_icon_url"
+        ]
+
+    def get_logo_url(self, obj):
+        request = self.context.get("request")
+        if obj.logo and request:
+            return request.build_absolute_uri(obj.logo.url)
+        return None
+
+    def get_all_category_icon_url(self, obj):
+        request = self.context.get("request")
+        if obj.all_category_icon and request:
+            return request.build_absolute_uri(obj.all_category_icon.url)
+        return None
+
