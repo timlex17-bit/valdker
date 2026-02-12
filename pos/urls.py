@@ -1,4 +1,5 @@
 from django.urls import path, include
+from .views import ShopViewSet
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -20,6 +21,7 @@ router.register(r'categories', CategoryViewSet)
 router.register(r'banners', BannerViewSet)
 router.register(r'units', UnitViewSet)
 router.register(r'orders', OrderViewSet)
+router.register(r"shops", ShopViewSet)
 
 urlpatterns = [
     path("auth/login/", views.api_login, name="api_login"),

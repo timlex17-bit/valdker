@@ -415,12 +415,10 @@ def api_login(request):
     }, status=200)
 
 
-class ShopPublicView(APIView):
-    def get(self, request):
-        shop = Shop.objects.first()
-        if not shop:
-            return Response({}, status=200)
+class ShopViewSet(viewsets.ModelViewSet):
+    queryset = Shop.objects.all().order_by("-id")
+    serializer_class = ShopSerializer
 
-        serializer = ShopSerializer(shop, context={"request": request})
-        return Response(serializer.data)
+    def get_serializer_context(self):
+        return {"request": self.request}
 
