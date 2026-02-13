@@ -16,3 +16,7 @@ venv310/
 Thumbs.db
 .vscode/
 .idea/
+
+# 🔐 Environment variables (LOCAL ONLY)
+.env
+.env.*
