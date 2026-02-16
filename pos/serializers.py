@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from django.db import transaction
+from .models import Expense
 from django.db.models import F
 
 from .models import (
@@ -184,6 +185,11 @@ class OrderSerializer(serializers.ModelSerializer):
             OrderItem.objects.create(order=order, **item_data)
 
         return order
+    
+class ExpenseSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Expense
+        fields = ["id", "name", "note", "amount", "date", "time"]    
 
 
 class BannerSerializer(serializers.ModelSerializer):

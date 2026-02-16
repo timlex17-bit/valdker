@@ -1,0 +1,87 @@
+{% extends 'admin/base_site.html' %}
+{% block content %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:12px; margin-bottom:18px;">
+  <div>
+    <h1 style="margin:0;">📊 Daily Profit Dashboard</h1>
+    <div style="color:#6b7280; margin-top:6px;">
+      Range: <strong>{{ range_start }}</strong> → <strong>{{ range_end }}</strong>
+    </div>
+  </div>
+
+  <form method="get" style="display:flex; gap:8px; align-items:end; flex-wrap:wrap;">
+    <div>
+      <label style="display:block; font-size:12px; color:#6b7280;">Start</label>
+      <input type="date" name="start" value="{{ range_start }}">
+    </div>
+    <div>
+      <label style="display:block; font-size:12px; color:#6b7280;">End</label>
+      <input type="date" name="end" value="{{ range_end }}">
+    </div>
+    <button type="submit" class="btn btn-primary">Apply</button>
+  </form>
+</div>
+
+<!-- CARDS -->
+<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:14px; margin-bottom:22px;">
+  <div style="background:#f1f5f9; padding:16px; border-radius:14px;">
+    <div style="color:#64748b; font-size:12px;">Total Sales</div>
+    <div style="font-size:26px; font-weight:800;">${{ total_sales }}</div>
+  </div>
+  <div style="background:#fff7ed; padding:16px; border-radius:14px;">
+    <div style="color:#9a3412; font-size:12px;">Total Expense</div>
+    <div style="font-size:26px; font-weight:800;">${{ total_expense }}</div>
+  </div>
+  <div style="background:#ecfdf5; padding:16px; border-radius:14px;">
+    <div style="color:#065f46; font-size:12px;">Net Profit</div>
+    <div style="font-size:26px; font-weight:800;">${{ net_profit }}</div>
+  </div>
+</div>
+
+<!-- CHARTS -->
+<div style="display:grid; grid-template-columns:1fr; gap:16px;">
+  <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px;">
+    <h3 style="margin:0 0 10px 0;">Sales vs Expense (Daily)</h3>
+    <canvas id="seLine" height="110"></canvas>
+  </div>
+
+  <div style="background:#fff; border:1px solid #e5e7eb; border-radius:16px; padding:16px;">
+    <h3 style="margin:0 0 10px 0;">Profit (Daily)</h3>
+    <canvas id="profitBar" height="110"></canvas>
+  </div>
+</div>
+
+<script>
+  const labels = {{ labels|safe }};
+  const sales = {{ sales|safe }};
+  const expense = {{ expense|safe }};
+  const profit = {{ profit|safe }};
+
+  new Chart(document.getElementById('seLine'), {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        { label: 'Sales', data: sales, tension: 0.3, fill: true },
+        { label: 'Expense', data: expense, tension: 0.3, fill: true }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: { legend: { position: 'top' } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+
+  new Chart(document.getElementById('profitBar'), {
+    type: 'bar',
+    data: { labels, datasets: [{ label: 'Profit', data: profit }] },
+    options: {
+      responsive: true,
+      plugins: { legend: { display: false } },
+      scales: { y: { beginAtZero: true } }
+    }
+  });
+</script>
+{% endblock %}

@@ -1,8 +1,17 @@
 from django.shortcuts import render, redirect
 from rest_framework import viewsets
+from rest_framework.permissions import IsAuthenticated
+from .serializers import ExpenseSerializer
 from django.http import HttpResponse
 from .models import Expense
 from rest_framework.viewsets import ModelViewSet
+
+from datetime import datetime, date
+from django.utils.dateparse import parse_date
+from django.db.models.functions import TruncDate, TruncMonth
+from rest_framework.views import APIView
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
 
 from django.contrib.auth import authenticate
 from rest_framework.permissions import AllowAny
@@ -390,7 +399,12 @@ def sales_chart_view(request):
         ["pos/sales_chart.html", "pos/sales_cart.html"],
         context
     )
+    
 
+class ExpenseViewSet(viewsets.ModelViewSet):
+    queryset = Expense.objects.all().order_by("-date", "-time", "-id")
+    serializer_class = ExpenseSerializer
+    permission_classes = [IsAuthenticated]    
 
 class BannerListView(APIView):
     def get(self, request):
@@ -444,3 +458,247 @@ class ShopViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         return {"request": self.request}
+
+class DailyProfitReportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        start = parse_date(request.GET.get("start") or "")
+        end = parse_date(request.GET.get("end") or "")
+
+        # default: bulan ini (aman)
+        today = date.today()
+        if not start:
+            start = today.replace(day=1)
+        if not end:
+            end = today
+
+        # SALES per hari (pakai Order.total)
+        sales_qs = (
+            Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
+            .annotate(d=TruncDate("created_at"))
+            .values("d")
+            .annotate(total=Sum("total"))
+            .order_by("d")
+        )
+
+        # EXPENSE per hari
+        exp_qs = (
+            Expense.objects.filter(date__gte=start, date__lte=end)
+            .values("date")
+            .annotate(total=Sum("amount"))
+            .order_by("date")
+        )
+
+        sales_map = {row["d"]: float(row["total"] or 0) for row in sales_qs}
+        exp_map = {row["date"]: float(row["total"] or 0) for row in exp_qs}
+
+        # gabung semua tanggal yang ada di salah satu map
+        all_days = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
+
+        rows = []
+        total_sales = 0.0
+        total_exp = 0.0
+
+        for d in all_days:
+            s = float(sales_map.get(d, 0))
+            e = float(exp_map.get(d, 0))
+            p = s - e
+            total_sales += s
+            total_exp += e
+            rows.append({
+                "date": d.strftime("%Y-%m-%d"),
+                "sales": round(s, 2),
+                "expense": round(e, 2),
+                "profit": round(p, 2),
+            })
+
+        return Response({
+            "range": {"start": start.strftime("%Y-%m-%d"), "end": end.strftime("%Y-%m-%d")},
+            "summary": {
+                "sales": round(total_sales, 2),
+                "expense": round(total_exp, 2),
+                "profit": round(total_sales - total_exp, 2),
+            },
+            "rows": rows
+        })
+
+
+class MonthlyPLReportAPIView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        start = parse_date(request.GET.get("start") or "")
+        end = parse_date(request.GET.get("end") or "")
+        today = date.today()
+
+        # default: 12 bulan terakhir (sederhana)
+        if not start:
+            start = date(today.year, 1, 1)
+        if not end:
+            end = date(today.year, 12, 31)
+
+        sales_qs = (
+            Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
+            .annotate(m=TruncMonth("created_at"))
+            .values("m")
+            .annotate(total=Sum("total"))
+            .order_by("m")
+        )
+
+        exp_qs = (
+            Expense.objects.filter(date__gte=start, date__lte=end)
+            .annotate(m=TruncMonth("date"))
+            .values("m")
+            .annotate(total=Sum("amount"))
+            .order_by("m")
+        )
+
+        sales_map = {row["m"]: float(row["total"] or 0) for row in sales_qs}
+        exp_map = {row["m"]: float(row["total"] or 0) for row in exp_qs}
+
+        all_months = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
+
+        rows = []
+        total_sales = 0.0
+        total_exp = 0.0
+
+        for m in all_months:
+            s = float(sales_map.get(m, 0))
+            e = float(exp_map.get(m, 0))
+            p = s - e
+            total_sales += s
+            total_exp += e
+            rows.append({
+                "month": m.strftime("%Y-%m"),
+                "sales": round(s, 2),
+                "expense": round(e, 2),
+                "profit": round(p, 2),
+            })
+
+        return Response({
+            "range": {"start": start.strftime("%Y-%m-%d"), "end": end.strftime("%Y-%m-%d")},
+            "summary": {
+                "sales": round(total_sales, 2),
+                "expense": round(total_exp, 2),
+                "profit": round(total_sales - total_exp, 2),
+            },
+            "rows": rows
+        })
+        
+@role_required(['admin', 'manager', 'cashier'])
+def daily_profit_dashboard_view(request):
+    # default: 14 hari terakhir
+    from datetime import timedelta
+    from django.utils.timezone import now
+    from django.utils.dateparse import parse_date
+    import json
+
+    start = parse_date(request.GET.get("start") or "")
+    end = parse_date(request.GET.get("end") or "")
+
+    today = now().date()
+    if not end:
+        end = today
+    if not start:
+        start = end - timedelta(days=13)
+
+    # SALES per hari (Order.total)
+    sales_qs = (
+        Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
+        .annotate(d=TruncDate("created_at"))
+        .values("d")
+        .annotate(total=Sum("total"))
+        .order_by("d")
+    )
+
+    # EXPENSE per hari
+    exp_qs = (
+        Expense.objects.filter(date__gte=start, date__lte=end)
+        .values("date")
+        .annotate(total=Sum("amount"))
+        .order_by("date")
+    )
+
+    sales_map = {row["d"]: float(row["total"] or 0) for row in sales_qs}
+    exp_map = {row["date"]: float(row["total"] or 0) for row in exp_qs}
+
+    all_days = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
+
+    labels = []
+    sales = []
+    expense = []
+    profit = []
+
+    total_sales = 0.0
+    total_exp = 0.0
+
+    for d in all_days:
+        s = float(sales_map.get(d, 0))
+        e = float(exp_map.get(d, 0))
+        p = s - e
+        labels.append(d.strftime("%d %b"))
+        sales.append(round(s, 2))
+        expense.append(round(e, 2))
+        profit.append(round(p, 2))
+        total_sales += s
+        total_exp += e
+
+    ctx = _admin_context(request, "Daily Profit Dashboard")
+    ctx.update({
+        "range_start": start.strftime("%Y-%m-%d"),
+        "range_end": end.strftime("%Y-%m-%d"),
+        "total_sales": round(total_sales, 2),
+        "total_expense": round(total_exp, 2),
+        "net_profit": round(total_sales - total_exp, 2),
+        "labels": json.dumps(labels),
+        "sales": json.dumps(sales),
+        "expense": json.dumps(expense),
+        "profit": json.dumps(profit),
+    })
+
+    return render(request, "pos/daily_profit_dashboard.html", ctx)
+
+@role_required(['admin', 'manager', 'cashier'])
+def monthly_pl_dashboard_view(request):
+    import json
+    data_sales = (
+        Order.objects.filter(is_paid=True)
+        .annotate(m=TruncMonth("created_at"))
+        .values("m")
+        .annotate(total=Sum("total"))
+        .order_by("m")
+    )
+    data_exp = (
+        Expense.objects
+        .annotate(m=TruncMonth("date"))
+        .values("m")
+        .annotate(total=Sum("amount"))
+        .order_by("m")
+    )
+
+    sales_map = {r["m"]: float(r["total"] or 0) for r in data_sales}
+    exp_map = {r["m"]: float(r["total"] or 0) for r in data_exp}
+    all_months = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
+
+    labels, sales, expense, profit = [], [], [], []
+    for m in all_months:
+        s = float(sales_map.get(m, 0))
+        e = float(exp_map.get(m, 0))
+        labels.append(m.strftime("%b %Y"))
+        sales.append(round(s, 2))
+        expense.append(round(e, 2))
+        profit.append(round(s - e, 2))
+
+    ctx = _admin_context(request, "Monthly Profit & Loss")
+    ctx.update({
+        "labels": json.dumps(labels),
+        "sales": json.dumps(sales),
+        "expense": json.dumps(expense),
+        "profit": json.dumps(profit),
+        "total_sales": round(sum(sales), 2),
+        "total_expense": round(sum(expense), 2),
+        "net_profit": round(sum(profit), 2),
+    })
+    return render(request, "pos/monthly_pl_dashboard.html", ctx)
+        
