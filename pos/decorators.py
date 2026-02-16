@@ -7,6 +7,6 @@ def role_required(roles):
         def _wrapped_view(request, *args, **kwargs):
             if hasattr(request.user, 'role') and request.user.role in roles:
                 return view_func(request, *args, **kwargs)
-            return redirect('/admin')  # atau ke halaman lain sesuai keinginanmu
+            return redirect('/admin')  
         return _wrapped_view
     return decorator

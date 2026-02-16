@@ -9,8 +9,10 @@ from rest_framework.permissions import AllowAny
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes
 
+from django.db.models import Sum, F, DecimalField, ExpressionWrapper
 from django.db.models.functions import TruncMonth
-from django.db.models import Sum
+import json
+
 from django.db import models
 from .models import Shop
 from django.template.loader import get_template
@@ -29,7 +31,7 @@ from .serializers import (
     OrderSerializer, CustomerSerializer, SupplierSerializer,
     ProductSerializer, CategorySerializer, UnitSerializer, ShopSerializer
 )
-from .decorators import role_required  
+from .decorators import role_required
 
 # ✅ TAMBAH: untuk context admin Jazzmin
 from django.contrib import admin as django_admin
@@ -42,23 +44,27 @@ class CustomerViewSet(viewsets.ModelViewSet):
     queryset = Customer.objects.all().order_by('-id')
     serializer_class = CustomerSerializer
 
+
 class SupplierViewSet(viewsets.ModelViewSet):
     queryset = Supplier.objects.all().order_by('-id')
     serializer_class = SupplierSerializer
 
+
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all().order_by('name')
     serializer_class = CategorySerializer
-    
+
     def get_serializer_context(self):
         return {'request': self.request}
+
 
 class UnitViewSet(viewsets.ModelViewSet):
     queryset = Unit.objects.all().order_by('name')
     serializer_class = UnitSerializer
 
+
 class ProductViewSet(viewsets.ModelViewSet):
-    queryset = Product.objects.all().order_by("-id")  
+    queryset = Product.objects.all().order_by("-id")
     serializer_class = ProductSerializer
 
     def get_queryset(self):
@@ -81,6 +87,7 @@ class ProductViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         return {"request": self.request}
+
 
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all().order_by('-created_at')
@@ -140,6 +147,7 @@ def sales_report_view(request):
 def pos_kasir_view(request):
     return render(request, 'pos/pos_kasir.html')
 
+
 # NOTE: ini duplicate dengan fungsi di atas, sesuai permintaan kamu saya tidak hapus.
 # Python akan memakai definisi yang terakhir ini.
 def pos_kasir_view(request):
@@ -180,11 +188,13 @@ def pos_kasir_view(request):
         'total': total
     })
 
+
 def pos_remove_from_cart(request, product_id):
     cart = request.session.get('cart', [])
     cart = [item for item in cart if item['product_id'] != str(product_id)]
     request.session['cart'] = cart
     return redirect('pos_kasir')
+
 
 def pos_checkout(request):
     from .models import Order, OrderItem, Product, Customer
@@ -215,7 +225,6 @@ def pos_checkout(request):
 
             # ✅ VALIDASI HARGA (WAJIB) — stop checkout kalau harga belum di-set
             if product.sell_price <= 0:
-                # hitung cart_items + total supaya halaman kasir tetap tampil lengkap
                 products = Product.objects.all()
                 cart_items = []
                 total = 0
@@ -262,6 +271,7 @@ def pos_checkout(request):
 
     return redirect('pos_kasir')
 
+
 def order_receipt_pdf(request, order_id):
     order = get_object_or_404(
         Order.objects.prefetch_related('items__product', 'items__weight_unit').select_related('served_by'),
@@ -286,7 +296,7 @@ def order_receipt_pdf(request, order_id):
     html = template.render({
         'order': order,
         'shop': shop,
-        'receipt_items': receipt_items,  # ✅ kirim list yang sudah benar
+        'receipt_items': receipt_items,
     })
 
     result = io.BytesIO()
@@ -318,11 +328,15 @@ def expense_chart_view(request):
         .order_by('month')
     )
 
-    labels = [d['month'].strftime('%B %Y') for d in data if d['month']]
-    totals = [float(d['total']) for d in data if d['month']]
+    labels_list = [d['month'].strftime('%B %Y') for d in data if d.get('month')]
+    totals_list = [float(d.get('total') or 0) for d in data if d.get('month')]
 
     context = _admin_context(request, "Expense Chart")
-    context.update({'labels': labels, 'totals': totals})
+    # ✅ kirim JSON agar aman untuk Chart.js
+    context.update({
+        'labels': json.dumps(labels_list),
+        'totals': json.dumps(totals_list),
+    })
 
     return _render_with_fallback(
         request,
@@ -334,26 +348,37 @@ def expense_chart_view(request):
 # ✅ DIUBAH: tambahkan 'cashier'
 @role_required(['admin', 'manager', 'cashier'])
 def sales_chart_view(request):
-    data = (
-        OrderItem.objects
-        .annotate(month=TruncMonth('order__created_at'))
-        .values('month')
-        .annotate(total=Sum('price'))
-        .order_by('month')
+    # 1) Hitung line_total = price * quantity
+    line_total = ExpressionWrapper(
+        F("price") * F("quantity"),
+        output_field=DecimalField(max_digits=12, decimal_places=2)
     )
 
-    labels = [d['month'].strftime('%B %Y') for d in data if d['month']]
-    sales = [float(d['total']) for d in data if d['month']]
+    # 2) Grouping per bulan, lalu jumlahkan line_total
+    data = (
+        OrderItem.objects
+        .filter(order__is_paid=True)  # hanya transaksi PAID
+        .annotate(month=TruncMonth("order__created_at"))
+        .values("month")
+        .annotate(total_sales=Sum(line_total))
+        .order_by("month")
+    )
 
-    total_order_price = sum(sales)
-    total_tax = 0
-    total_discount = 0
-    net_sales = total_order_price - total_discount
+    # 3) Siapkan labels & sales untuk chart
+    labels_list = [d["month"].strftime("%B %Y") for d in data if d.get("month")]
+    sales_list = [float(d.get("total_sales") or 0) for d in data if d.get("month")]
 
+    # 4) Hitung card summary
+    total_order_price = float(sum(sales_list))
+    total_tax = 0.0
+    total_discount = 0.0
+    net_sales = total_order_price - total_discount + total_tax
+
+    # 5) context untuk template + aman untuk JS (json.dumps)
     context = _admin_context(request, "Sales Chart")
     context.update({
-        "labels": labels,
-        "sales": sales,
+        "labels": json.dumps(labels_list),
+        "sales": json.dumps(sales_list),
         "total_order_price": total_order_price,
         "total_tax": total_tax,
         "total_discount": total_discount,
@@ -372,7 +397,8 @@ class BannerListView(APIView):
         banners = Banner.objects.all()
         serializer = BannerSerializer(banners, many=True, context={'request': request})
         return Response(serializer.data)
-    
+
+
 class BannerViewSet(ModelViewSet):
     queryset = Banner.objects.all()
     serializer_class = BannerSerializer
@@ -381,18 +407,15 @@ class BannerViewSet(ModelViewSet):
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login(request):
-    # ✅ Aman untuk JSON / form-data
     username = (request.data.get("username") or "").strip()
     password = request.data.get("password") or ""
 
-    # ✅ Validasi input biar jelas kalau request kosong
     if not username or not password:
         return Response(
             {"detail": "username dan password wajib diisi"},
             status=400
         )
 
-    # ✅ Pakai request biar auth backend konsisten
     user = authenticate(request, username=username, password=password)
     if not user:
         return Response(
@@ -421,4 +444,3 @@ class ShopViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         return {"request": self.request}
-
