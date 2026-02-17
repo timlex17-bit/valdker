@@ -129,9 +129,16 @@ class OrderItemSerializer(serializers.ModelSerializer):
         allow_null=True,
     )
 
+    # ✅ NEW: order type per item (DINE_IN/TAKE_OUT/DELIVERY)
+    # Jika tidak dikirim dari frontend, default dari model = TAKE_OUT
+    order_type = serializers.ChoiceField(
+        choices=OrderItem.OrderType.choices,
+        required=False
+    )
+
     class Meta:
         model = OrderItem
-        fields = ["product", "quantity", "price", "weight_unit"]
+        fields = ["product", "quantity", "price", "weight_unit", "order_type"]
 
 
 class OrderSerializer(serializers.ModelSerializer):
@@ -144,11 +151,24 @@ class OrderSerializer(serializers.ModelSerializer):
 
     items = OrderItemSerializer(many=True)
 
+    # ✅ NEW header fields (optional)
+    default_order_type = serializers.ChoiceField(
+        choices=Order.OrderType.choices,
+        required=False
+    )
+    table_number = serializers.CharField(required=False, allow_blank=True)
+    delivery_address = serializers.CharField(required=False, allow_blank=True)
+    delivery_fee = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
     class Meta:
         model = Order
         fields = [
             "id", "customer", "created_at", "payment_method", "subtotal",
-            "discount", "tax", "total", "notes", "is_paid", "items",
+            "discount", "tax", "total", "notes", "is_paid",
+
+            # ✅ NEW
+            "default_order_type", "table_number", "delivery_address", "delivery_fee",
+
+            "items",
         ]
         read_only_fields = ["id", "created_at"]
 
@@ -160,14 +180,49 @@ class OrderSerializer(serializers.ModelSerializer):
         items = attrs.get("items") or []
         if len(items) == 0:
             raise serializers.ValidationError({"items": "Items tidak boleh kosong."})
+
+        # ✅ normalize order_type kosong -> TAKE_OUT
+        for i in items:
+            if not i.get("order_type"):
+                i["order_type"] = OrderItem.OrderType.TAKE_OUT
+
+        # ✅ NEW validation for dine-in / delivery based on items order_type
+        has_dine_in = any((i.get("order_type") == "DINE_IN") for i in items)
+        has_delivery = any((i.get("order_type") == "DELIVERY") for i in items)
+
+        table_number = (attrs.get("table_number") or "").strip()
+        delivery_address = (attrs.get("delivery_address") or "").strip()
+
+        if has_dine_in and not table_number:
+            raise serializers.ValidationError({"table_number": "Table number wajib untuk item Dine-In."})
+
+        if has_delivery and not delivery_address:
+            raise serializers.ValidationError({"delivery_address": "Delivery address wajib untuk item Delivery."})
+
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop("items")
 
-        # ✅ pastikan customer tidak wajib
-        # (kalau tidak ada key 'customer', Order.objects.create akan aman)
+        # ✅ AUTO SET default_order_type berdasarkan items (kalau frontend tidak kirim)
+        if "default_order_type" not in validated_data:
+            types = [
+                it.get("order_type") or OrderItem.OrderType.TAKE_OUT
+                for it in items_data
+            ]
+            uniq = set(types)
+
+            if len(uniq) == 1:
+                validated_data["default_order_type"] = list(uniq)[0]
+            else:
+                # kalau campur type → fallback TAKE_OUT (atau nanti bisa tambah MIXED)
+                validated_data["default_order_type"] = Order.OrderType.TAKE_OUT
+
+        # ✅ ensure delivery_fee default
+        if "delivery_fee" not in validated_data:
+            validated_data["delivery_fee"] = 0
+
         order = Order.objects.create(**validated_data)
 
         for item_data in items_data:
@@ -181,15 +236,19 @@ class OrderSerializer(serializers.ModelSerializer):
                     "stock": f"Stok {product.name} tidak cukup. Sisa {product.stock}, minta {quantity}"
                 })
 
+            # default order_type kalau frontend tidak kirim
+            if "order_type" not in item_data:
+                item_data["order_type"] = OrderItem.OrderType.TAKE_OUT
+
             Product.objects.filter(id=product.id).update(stock=F("stock") - quantity)
             OrderItem.objects.create(order=order, **item_data)
 
         return order
-    
+
 class ExpenseSerializer(serializers.ModelSerializer):
     class Meta:
         model = Expense
-        fields = ["id", "name", "note", "amount", "date", "time"]    
+        fields = ["id", "name", "note", "amount", "date", "time"]
 
 
 class BannerSerializer(serializers.ModelSerializer):

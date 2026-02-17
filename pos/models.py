@@ -89,6 +89,11 @@ class Product(models.Model):
 
 # ========== ORDER ==========
 class Order(models.Model):
+    class OrderType(models.TextChoices):
+        DINE_IN = "DINE_IN", "Dine-In"
+        TAKE_OUT = "TAKE_OUT", "Take-Out"
+        DELIVERY = "DELIVERY", "Delivery"
+
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     payment_method = models.CharField(max_length=50)
@@ -107,16 +112,44 @@ class Order(models.Model):
         related_name='orders'
     )
 
+    # ✅ NEW: header default type (untuk laporan/filter + default UI)
+    default_order_type = models.CharField(
+        max_length=20,
+        choices=OrderType.choices,
+        default=OrderType.TAKE_OUT,
+        db_index=True
+    )
+
+    # ✅ NEW: dine-in fields
+    table_number = models.CharField(max_length=20, blank=True, default="")
+
+    # ✅ NEW: delivery fields
+    delivery_address = models.TextField(blank=True, default="")
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
     def __str__(self):
         return f"Order #{self.id}"
 
 
 class OrderItem(models.Model):
+    class OrderType(models.TextChoices):
+        DINE_IN = "DINE_IN", "Dine-In"
+        TAKE_OUT = "TAKE_OUT", "Take-Out"
+        DELIVERY = "DELIVERY", "Delivery"
+
     order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     quantity = models.PositiveIntegerField()
     price = models.DecimalField(max_digits=10, decimal_places=2)
     weight_unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True)
+
+    # ✅ NEW: status per item (default TAKE_OUT)
+    order_type = models.CharField(
+        max_length=20,
+        choices=OrderType.choices,
+        default=OrderType.TAKE_OUT,
+        db_index=True
+    )
 
 
 # ========== EXPENSE ==========

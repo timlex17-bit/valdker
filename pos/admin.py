@@ -22,16 +22,16 @@ class ProductAdmin(admin.ModelAdmin):
     def weight_display(self, obj):
         return f"{obj.weight} {obj.unit.name if obj.unit else ''}"
     weight_display.short_description = 'Weight'
-    
-    
+
+
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = ('id', 'customer_name', 'invoice_id', 'order_type', 'total', 'payment_method', 'created_at_formatted', 'served_by', 'is_paid', 'receipt_link')
     search_fields = ('customer__name', 'id')
-    list_filter = ('payment_method',)
+    list_filter = ('payment_method', 'is_paid', 'default_order_type')
     ordering = ('-created_at',)
-    exclude = ('served_by',) 
-    
+    exclude = ('served_by',)
+
     def customer_name(self, obj):
         return obj.customer.name if obj.customer else "Walk In Customer"
     customer_name.short_description = 'Name'
@@ -40,8 +40,13 @@ class OrderAdmin(admin.ModelAdmin):
         return f"INV{obj.id:015d}"
     invoice_id.short_description = 'Invoice ID'
 
+    # ✅ FIX: tampilkan type dari Order.default_order_type
     def order_type(self, obj):
-        return "PICK UP"
+        try:
+            # show label (Dine-In / Take-Out / Delivery)
+            return obj.get_default_order_type_display()
+        except Exception:
+            return "Take-Out"
     order_type.short_description = 'Type'
 
     def created_at_formatted(self, obj):
@@ -90,8 +95,7 @@ class OrderAdmin(admin.ModelAdmin):
 @admin.register(Banner)
 class BannerAdmin(admin.ModelAdmin):
     list_display = ['title', 'active']
-        
-        
+
 
 admin.site.register(Customer)
 admin.site.register(Supplier)
@@ -100,6 +104,7 @@ admin.site.register(Unit)
 admin.site.register(Expense)
 admin.site.register(Shop)
 
+
 class CustomUserAdmin(UserAdmin):
     model = CustomUser
     list_display = ['username', 'email', 'role', 'is_active', 'is_staff']
@@ -107,7 +112,9 @@ class CustomUserAdmin(UserAdmin):
         (None, {'fields': ('role',)}),
     )
 
+
 admin.site.register(CustomUser, CustomUserAdmin)
+
 
 @admin.register(TokenProxy)
 class TokenProxyAdmin(admin.ModelAdmin):
