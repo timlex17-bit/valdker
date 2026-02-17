@@ -89,6 +89,7 @@ class Product(models.Model):
 
 # ========== ORDER ==========
 class Order(models.Model):
+
     class OrderType(models.TextChoices):
         DINE_IN = "DINE_IN", "Dine-In"
         TAKE_OUT = "TAKE_OUT", "Take-Out"
@@ -104,6 +105,16 @@ class Order(models.Model):
     notes = models.TextField(blank=True)
     is_paid = models.BooleanField(default=True)
 
+    # ✅ NEW: header order type + extra fields
+    default_order_type = models.CharField(
+        max_length=20,
+        choices=OrderType.choices,
+        default=OrderType.TAKE_OUT
+    )
+    table_number = models.CharField(max_length=20, blank=True, default="")
+    delivery_address = models.TextField(blank=True, default="")
+    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+
     served_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
@@ -112,24 +123,29 @@ class Order(models.Model):
         related_name='orders'
     )
 
-    # ✅ NEW: header default type (untuk laporan/filter + default UI)
-    default_order_type = models.CharField(
-        max_length=20,
-        choices=OrderType.choices,
-        default=OrderType.TAKE_OUT,
-        db_index=True
-    )
-
-    # ✅ NEW: dine-in fields
-    table_number = models.CharField(max_length=20, blank=True, default="")
-
-    # ✅ NEW: delivery fields
-    delivery_address = models.TextField(blank=True, default="")
-    delivery_fee = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-
     def __str__(self):
         return f"Order #{self.id}"
 
+
+class OrderItem(models.Model):
+
+    class OrderType(models.TextChoices):
+        DINE_IN = "DINE_IN", "Dine-In"
+        TAKE_OUT = "TAKE_OUT", "Take-Out"
+        DELIVERY = "DELIVERY", "Delivery"
+
+    order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField()
+    price = models.DecimalField(max_digits=10, decimal_places=2)
+    weight_unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True)
+
+    # ✅ NEW: per-item type (override)
+    order_type = models.CharField(
+        max_length=20,
+        choices=OrderType.choices,
+        default=OrderType.TAKE_OUT
+    )
 
 class OrderItem(models.Model):
     class OrderType(models.TextChoices):
