@@ -1,5 +1,16 @@
 from django.shortcuts import render, redirect
 from rest_framework import viewsets
+from django.db.models import Sum, Value, DecimalField
+from django.db.models.functions import Coalesce
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
+from django.utils import timezone
+from rest_framework.decorators import api_view, permission_classes, authentication_classes
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.response import Response
+from rest_framework import status
+from rest_framework.authentication import TokenAuthentication
+from pos.models import Order, Expense
 from rest_framework.permissions import IsAuthenticated
 from .serializers import ExpenseSerializer
 from django.http import HttpResponse
@@ -701,4 +712,37 @@ def monthly_pl_dashboard_view(request):
         "net_profit": round(sum(profit), 2),
     })
     return render(request, "pos/monthly_pl_dashboard.html", ctx)
-        
+
+ORDER_TOTAL_FIELD = "total"      
+EXPENSE_AMOUNT_FIELD = "amount" 
+
+@api_view(["GET"])
+@authentication_classes([TokenAuthentication])
+@permission_classes([IsAuthenticated])
+def net_income_today(request):
+    today = timezone.localdate()
+
+    dec = DecimalField(max_digits=12, decimal_places=2)
+
+    # ✅ SALES (paid only)
+    sales = (
+        Order.objects
+        .filter(is_paid=True, created_at__date=today)
+        .aggregate(v=Coalesce(Sum("total"), Value(0), output_field=dec))["v"]
+    )
+
+    # ✅ EXPENSE (use Expense.date)
+    expense = (
+        Expense.objects
+        .filter(date=today)
+        .aggregate(v=Coalesce(Sum("amount"), Value(0), output_field=dec))["v"]
+    )
+
+    net_income = sales - expense
+
+    return Response({
+        "date": str(today),
+        "sales": float(sales),
+        "expense": float(expense),
+        "net_income": float(net_income),
+    })

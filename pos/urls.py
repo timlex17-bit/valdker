@@ -1,5 +1,7 @@
 from django.urls import path, include
 from .views import ShopViewSet
+from django.urls import path
+from .views import net_income_today
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -24,9 +26,11 @@ router.register(r"expenses", ExpenseViewSet)
 urlpatterns = [
     path("auth/login/", views.api_login, name="api_login"),
     path("auth/login", views.api_login, name="api_login_noslash"),
-    
+
     path("reports/daily-profit/", DailyProfitReportAPIView.as_view(), name="api_daily_profit"),
     path("reports/monthly-pl/", MonthlyPLReportAPIView.as_view(), name="api_monthly_pl"),
-    
+    path("reports/net-income-today/", views.net_income_today, name="net_income_today"),
+
     path("", include(router.urls)),
 ]
+
