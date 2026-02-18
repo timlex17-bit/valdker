@@ -1,126 +1,130 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <title>Receipt</title>
-    <style>
-        body {
-            font-family: "Courier New", Courier, monospace;
-            font-size: 12px;
-            margin: 0;
-            padding: 10px;
-        }
-        .center { text-align: center; }
-        .bold { font-weight: bold; }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 10px;
-        }
-        td { padding: 4px 0; }
-        .total {
-            margin-top: 10px;
-            font-size: 14px;
-            font-weight: bold;
-        }
-        .small { font-size: 10px; }
-        img.logo {
-            width: 100px;
-            height: auto;
-            margin-bottom: 5px;
-        }
-        hr {
-            border: none;
-            border-top: 1px dashed #000;
-            margin: 10px 0;
-        }
-        .order-type {
-            font-size: 10px;
-            font-style: italic;
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <title>Receipt</title>
+
+  <style>
+    @page { size: 164pt 1000pt; margin: 6pt; } /* 58mm width */
+    html, body {
+      margin: 0; padding: 0;
+      font-family: "Courier New", Courier, monospace;
+      font-size: 9.5pt;
+      color: #000;
+    }
+    .paper { width: 164pt; }
+
+    .center { text-align: center; }
+    .bold { font-weight: 700; }
+    .muted { color: #222; }
+
+    .logo {
+      width: 75pt;
+      height: auto;
+      display: block;
+      margin: 0 auto 6pt;
+    }
+
+    .sep {
+      margin: 6pt 0;
+      font-size: 9.5pt;
+      line-height: 1;
+      white-space: nowrap;
+      overflow: hidden;
+    }
+
+    table { width: 100%; border-collapse: collapse; }
+    td { padding: 2pt 0; vertical-align: top; }
+
+    .right { text-align: right; white-space: nowrap; }
+    .small { font-size: 8.5pt; }
+
+    .item-name { font-weight: 700; padding-top: 4pt; }
+    .item-total { font-weight: 700; padding-top: 4pt; }
+
+    .grand td {
+      font-size: 12.5pt;
+      font-weight: 800;
+      padding-top: 6pt;
+    }
+
+    .footer {
+      text-align: center;
+      font-size: 9pt;
+      margin-top: 6pt;
+    }
+  </style>
 </head>
+
 <body>
+  <div class="paper">
 
-<div class="center">
-    {% if shop.logo %}
-        <img src="{{ shop.logo.url }}" alt="Shop Logo" class="logo">
-    {% endif %}
-
-    <div class="bold">{{ shop.name }}</div>
-    <div class="small">{{ shop.address }}</div>
-    <div class="small">{{ shop.phone }}</div>
-    <hr>
-
-    <div><b>Invoice:</b> INV{{ order.id|stringformat:"015d" }}</div>
-    <div><b>Date:</b> {{ order.created_at|date:"d-m-Y H:i" }}</div>
-    <div><b>Cashier:</b> {{ order.served_by.username }}</div>
-
-    <!-- ✅ HEADER ORDER TYPE -->
-    <div>
-        <b>Order Type:</b>
-        {{ order.default_order_type }}
+    <!-- HEADER -->
+    <div class="center">
+      {% if shop.logo %}
+        <img class="logo" src="{{ shop.logo.url }}" alt="Logo" />
+      {% endif %}
+      <div class="bold">{{ shop.name }}</div>
+      {% if shop.address %}<div class="muted">{{ shop.address }}</div>{% endif %}
+      {% if shop.phone %}<div class="muted">{{ shop.phone }}</div>{% endif %}
     </div>
 
-    {% if order.table_number %}
-        <div><b>Table:</b> {{ order.table_number }}</div>
-    {% endif %}
+    <div class="sep">------------------------------------------</div>
 
-    {% if order.delivery_address %}
-        <div><b>Delivery:</b> {{ order.delivery_address }}</div>
-    {% endif %}
-</div>
+    <!-- META -->
+    <table>
+      <tr><td>Order:</td><td class="right">INV{{ order.id|stringformat:"015d" }}</td></tr>
+      <tr><td>Kasir:</td><td class="right">{{ order.served_by.username }}</td></tr>
+      <tr><td>Data:</td><td class="right">{{ order.created_at|date:"d/m/y H:i" }}</td></tr>
+      {% if order.table_number %}
+      <tr><td>Table:</td><td class="right">{{ order.table_number }}</td></tr>
+      {% endif %}
+      {% if order.delivery_address %}
+      <tr><td>Delivery:</td><td class="right">{{ order.delivery_address }}</td></tr>
+      {% endif %}
+    </table>
 
-<hr>
+    <div class="sep">------------------------------------------</div>
 
-<table>
-    {% for item in order.items.all %}
-    <tr>
-        <td colspan="2">
-            {{ item.product.name }}
-        </td>
-    </tr>
-
-    <!-- ✅ ORDER TYPE PER ITEM -->
-    <tr>
-        <td colspan="2" class="order-type">
-            {% if item.order_type == "DINE_IN" %}
-                (🍽️ DINE IN)
-            {% elif item.order_type == "DELIVERY" %}
-                (🚚 DELIVERY)
-            {% else %}
-                (🥡 TAKE OUT)
-            {% endif %}
-        </td>
-    </tr>
-
-    <tr>
-        <td class="small">
-            {{ item.quantity }} x ${{ item.price|floatformat:2 }}
-        </td>
-        <td class="small" style="text-align: right;">
-            {% widthratio item.price 1 item.quantity as line_total %}
-            ${{ line_total|floatformat:2 }}
-        </td>
-    </tr>
+    <!-- ITEMS -->
+    {% for item in receipt_items %}
+      <table>
+        <tr>
+          <td class="item-name">{{ item.name }}</td>
+          <td class="right item-total">${{ item.line_total|floatformat:2 }}</td>
+        </tr>
+        <tr>
+          <td class="small muted" colspan="2">
+            ({{ item.order_type_icon }} {{ item.order_type }})
+          </td>
+        </tr>
+        <tr>
+          <td class="small">{{ item.qty }} x ${{ item.unit_price|floatformat:2 }}</td>
+          <td class="right small"></td>
+        </tr>
+      </table>
     {% endfor %}
-</table>
 
-<hr>
+    <div class="sep">------------------------------------------</div>
 
-<div class="total">
-    Subtotal: ${{ order.subtotal|floatformat:2 }}<br>
-    Discount: ${{ order.discount|floatformat:2 }}<br>
-    Tax: ${{ order.tax|floatformat:2 }}<br>
-    Total: ${{ order.total|floatformat:2 }}
-</div>
+    <!-- TOTALS -->
+    <table>
+      <tr><td class="bold">Subtotal</td><td class="right bold">${{ order.subtotal|floatformat:2 }}</td></tr>
+      <tr><td>Discount</td><td class="right">${{ order.discount|floatformat:2 }}</td></tr>
+      <tr><td>VAT / Tax</td><td class="right">${{ order.tax|floatformat:2 }}</td></tr>
+      {% if order.delivery_fee %}
+      <tr><td>Delivery Fee</td><td class="right">${{ order.delivery_fee|floatformat:2 }}</td></tr>
+      {% endif %}
+      <tr class="grand"><td>Total</td><td class="right">${{ order.total|floatformat:2 }}</td></tr>
+    </table>
 
-<hr>
+    <div class="sep">------------------------------------------</div>
 
-<div class="center small">
-    Obrigado Barak! 👋<br>
-    {{ shop.name }}
-</div>
+    <div class="footer">
+      Obrigado ba order ona iha!<br/>
+      {{ shop.name }}
+    </div>
 
+  </div>
 </body>
 </html>
