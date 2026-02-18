@@ -10,28 +10,20 @@
             margin: 0;
             padding: 10px;
         }
-        .center {
-            text-align: center;
-        }
-        .bold {
-            font-weight: bold;
-        }
+        .center { text-align: center; }
+        .bold { font-weight: bold; }
         table {
             width: 100%;
             border-collapse: collapse;
             margin-top: 10px;
         }
-        td {
-            padding: 4px 0;
-        }
+        td { padding: 4px 0; }
         .total {
             margin-top: 10px;
             font-size: 14px;
             font-weight: bold;
         }
-        .small {
-            font-size: 10px;
-        }
+        .small { font-size: 10px; }
         img.logo {
             width: 100px;
             height: auto;
@@ -42,12 +34,15 @@
             border-top: 1px dashed #000;
             margin: 10px 0;
         }
+        .order-type {
+            font-size: 10px;
+            font-style: italic;
+        }
     </style>
 </head>
 <body>
 
 <div class="center">
-    <!-- Logo toko atau QRIS di atas -->
     {% if shop.logo %}
         <img src="{{ shop.logo.url }}" alt="Shop Logo" class="logo">
     {% endif %}
@@ -58,8 +53,22 @@
     <hr>
 
     <div><b>Invoice:</b> INV{{ order.id|stringformat:"015d" }}</div>
-    <div><b>Data:</b> {{ order.created_at|date:"d-m-Y H:i" }}</div>
-    <div><b>Kasir:</b> {{ order.served_by.username }}</div>
+    <div><b>Date:</b> {{ order.created_at|date:"d-m-Y H:i" }}</div>
+    <div><b>Cashier:</b> {{ order.served_by.username }}</div>
+
+    <!-- ✅ HEADER ORDER TYPE -->
+    <div>
+        <b>Order Type:</b>
+        {{ order.default_order_type }}
+    </div>
+
+    {% if order.table_number %}
+        <div><b>Table:</b> {{ order.table_number }}</div>
+    {% endif %}
+
+    {% if order.delivery_address %}
+        <div><b>Delivery:</b> {{ order.delivery_address }}</div>
+    {% endif %}
 </div>
 
 <hr>
@@ -67,15 +76,28 @@
 <table>
     {% for item in order.items.all %}
     <tr>
-        <td colspan="2">{{ item.product.name }}</td>
+        <td colspan="2">
+            {{ item.product.name }}
+        </td>
     </tr>
+
+    <!-- ✅ ORDER TYPE PER ITEM -->
     <tr>
-        <!-- kiri: qty x unit price -->
+        <td colspan="2" class="order-type">
+            {% if item.order_type == "DINE_IN" %}
+                (🍽️ DINE IN)
+            {% elif item.order_type == "DELIVERY" %}
+                (🚚 DELIVERY)
+            {% else %}
+                (🥡 TAKE OUT)
+            {% endif %}
+        </td>
+    </tr>
+
+    <tr>
         <td class="small">
             {{ item.quantity }} x ${{ item.price|floatformat:2 }}
         </td>
-
-        <!-- kanan: line total = qty * price -->
         <td class="small" style="text-align: right;">
             {% widthratio item.price 1 item.quantity as line_total %}
             ${{ line_total|floatformat:2 }}
