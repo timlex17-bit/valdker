@@ -217,7 +217,7 @@ def pos_remove_from_cart(request, product_id):
 
 
 def pos_checkout(request):
-    from .models import Order, OrderItem, Product, Customer
+    from .models import Order, OrderItem, Product
 
     cart = request.session.get('cart', [])
     if not cart:
@@ -226,6 +226,7 @@ def pos_checkout(request):
     if request.method == 'POST':
         payment_method = request.POST.get('payment_method')
 
+        # ✅ minimal: set default_order_type + required fields
         order = Order.objects.create(
             customer=None,
             payment_method=payment_method,
@@ -235,7 +236,13 @@ def pos_checkout(request):
             total=0,
             notes="",
             served_by=request.user,
-            is_paid=True
+            is_paid=True,
+
+            # ✅ NEW FIELDS
+            default_order_type=Order.OrderType.TAKE_OUT,
+            table_number="",
+            delivery_address="",
+            delivery_fee=0,
         )
 
         subtotal = 0
@@ -243,7 +250,6 @@ def pos_checkout(request):
             product = Product.objects.get(id=item['product_id'])
             quantity = item['quantity']
 
-            # ✅ VALIDASI HARGA (WAJIB) — stop checkout kalau harga belum di-set
             if product.sell_price <= 0:
                 products = Product.objects.all()
                 cart_items = []
@@ -270,8 +276,12 @@ def pos_checkout(request):
                 product=product,
                 quantity=quantity,
                 price=product.sell_price,
-                weight_unit=product.unit
+                weight_unit=product.unit,
+
+                # ✅ NEW per-item type (web checkout default)
+                order_type=OrderItem.OrderType.TAKE_OUT,
             )
+
             product.stock -= quantity
             product.save()
             subtotal += product.sell_price * quantity
