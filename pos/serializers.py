@@ -151,7 +151,15 @@ class OrderSerializer(serializers.ModelSerializer):
 
     items = OrderItemSerializer(many=True)
 
-    # ✅ NEW header fields (optional)
+    # ✅ NEW: final order type from client (optional)
+    # NOTE: backend will compute & override based on items (enterprise).
+    order_type = serializers.ChoiceField(
+        choices=Order.OrderType.choices,
+        required=False,
+        write_only=True
+    )
+
+    # ✅ header fields (optional)
     default_order_type = serializers.ChoiceField(
         choices=Order.OrderType.choices,
         required=False
@@ -159,6 +167,7 @@ class OrderSerializer(serializers.ModelSerializer):
     table_number = serializers.CharField(required=False, allow_blank=True)
     delivery_address = serializers.CharField(required=False, allow_blank=True)
     delivery_fee = serializers.DecimalField(max_digits=10, decimal_places=2, required=False, default=0)
+
     class Meta:
         model = Order
         fields = [
@@ -166,6 +175,7 @@ class OrderSerializer(serializers.ModelSerializer):
             "discount", "tax", "total", "notes", "is_paid",
 
             # ✅ NEW
+            "order_type",  # write-only (from Android/Vue)
             "default_order_type", "table_number", "delivery_address", "delivery_fee",
 
             "items",
@@ -186,7 +196,7 @@ class OrderSerializer(serializers.ModelSerializer):
             if not i.get("order_type"):
                 i["order_type"] = OrderItem.OrderType.TAKE_OUT
 
-        # ✅ NEW validation for dine-in / delivery based on items order_type
+        # ✅ validation for dine-in / delivery based on items order_type
         has_dine_in = any((i.get("order_type") == "DINE_IN") for i in items)
         has_delivery = any((i.get("order_type") == "DELIVERY") for i in items)
 
@@ -205,19 +215,27 @@ class OrderSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         items_data = validated_data.pop("items")
 
-        # ✅ AUTO SET default_order_type berdasarkan items (kalau frontend tidak kirim)
-        if "default_order_type" not in validated_data:
-            types = [
-                it.get("order_type") or OrderItem.OrderType.TAKE_OUT
-                for it in items_data
-            ]
-            uniq = set(types)
+        # If client sent "order_type", keep it only for optional mismatch checks, then remove.
+        client_order_type = validated_data.pop("order_type", None)
 
-            if len(uniq) == 1:
-                validated_data["default_order_type"] = list(uniq)[0]
-            else:
-                # kalau campur type → fallback TAKE_OUT (atau nanti bisa tambah MIXED)
-                validated_data["default_order_type"] = Order.OrderType.TAKE_OUT
+        # ✅ ALWAYS compute final order type from items (enterprise)
+        types = {
+            (it.get("order_type") or OrderItem.OrderType.TAKE_OUT)
+            for it in items_data
+        }
+        types = {t for t in types if t}  # defensive remove empty
+
+        if len(types) == 1:
+            computed = list(types)[0]  # DINE_IN / TAKE_OUT / DELIVERY
+        else:
+            computed = Order.OrderType.GENERAL  # ✅ mixed -> GENERAL
+
+        # Optional strict check (disable by default)
+        # if client_order_type and client_order_type != computed:
+        #     raise serializers.ValidationError({"order_type": "order_type mismatch vs items."})
+
+        # ✅ set/override header final type
+        validated_data["default_order_type"] = computed
 
         # ✅ ensure delivery_fee default
         if "delivery_fee" not in validated_data:
@@ -244,6 +262,7 @@ class OrderSerializer(serializers.ModelSerializer):
             OrderItem.objects.create(order=order, **item_data)
 
         return order
+
 
 class ExpenseSerializer(serializers.ModelSerializer):
     class Meta:

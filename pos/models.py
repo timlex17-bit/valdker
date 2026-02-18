@@ -91,6 +91,7 @@ class Product(models.Model):
 class Order(models.Model):
 
     class OrderType(models.TextChoices):
+        GENERAL = "GENERAL", "General"
         DINE_IN = "DINE_IN", "Dine-In"
         TAKE_OUT = "TAKE_OUT", "Take-Out"
         DELIVERY = "DELIVERY", "Delivery"
@@ -105,11 +106,12 @@ class Order(models.Model):
     notes = models.TextField(blank=True)
     is_paid = models.BooleanField(default=True)
 
-    # ✅ NEW: header order type + extra fields
+    # ✅ header/final order type + extra fields
     default_order_type = models.CharField(
         max_length=20,
         choices=OrderType.choices,
-        default=OrderType.TAKE_OUT
+        default=OrderType.TAKE_OUT,
+        db_index=True
     )
     table_number = models.CharField(max_length=20, blank=True, default="")
     delivery_address = models.TextField(blank=True, default="")
@@ -140,11 +142,12 @@ class OrderItem(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2)
     weight_unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True)
 
-    # ✅ NEW: per-item type (override)
+    # ✅ per-item order type
     order_type = models.CharField(
         max_length=20,
         choices=OrderType.choices,
-        default=OrderType.TAKE_OUT
+        default=OrderType.TAKE_OUT,
+        db_index=True
     )
 
 class OrderItem(models.Model):
