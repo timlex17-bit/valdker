@@ -1,26 +1,22 @@
 from rest_framework import serializers
 from django.db import transaction
-from .models import Expense
 from django.db.models import F
 
 from .models import (
     Customer, Supplier, Product, Category, Unit, Banner,
-    Order, OrderItem, Shop
+    Order, OrderItem, Shop, Expense,
+    StockAdjustment, InventoryCount, InventoryCountItem,
+    ProductReturn, ProductReturnItem, StockMovement
 )
 
 
 def _force_https(url: str | None) -> str | None:
-    """Cloudinary kadang return http, paksa jadi https supaya aman di semua frontend."""
     if not url:
         return url
     return url.replace("http://", "https://")
 
 
 def _abs_or_raw(request, url: str | None) -> str | None:
-    """
-    Kalau url relative (/media/..), jadikan absolute pakai request.
-    Kalau url sudah absolute (http/https), return apa adanya.
-    """
     if not url:
         return None
     if request and url.startswith("/"):
@@ -52,8 +48,7 @@ class CategorySerializer(serializers.ModelSerializer):
         try:
             if not obj.icon:
                 return None
-            url = obj.icon.url
-            url = _force_https(url)
+            url = _force_https(obj.icon.url)
             return _abs_or_raw(request, url)
         except Exception:
             return None
@@ -67,8 +62,6 @@ class UnitSerializer(serializers.ModelSerializer):
 
 class ProductSerializer(serializers.ModelSerializer):
     image_url = serializers.SerializerMethodField()
-
-    # tetap ada untuk upload/edit, dan untuk response juga tetap tampil
     image = serializers.ImageField(use_url=True, required=False, allow_null=True)
 
     category = CategorySerializer(read_only=True)
@@ -103,8 +96,7 @@ class ProductSerializer(serializers.ModelSerializer):
         try:
             if not obj.image:
                 return None
-            url = obj.image.url
-            url = _force_https(url)
+            url = _force_https(obj.image.url)
             return _abs_or_raw(request, url)
         except Exception:
             return None
@@ -112,25 +104,25 @@ class ProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product
         fields = [
-            "id", "name", "code", "description", "stock",
-            "buy_price", "sell_price", "weight", "image", "image_url",
-            "category", "category_id", "supplier", "supplier_id", "unit", "unit_id",
+            "id", "name",
+            "sku",           
+            "code",          
+            "description", "stock",
+            "buy_price", "sell_price", "weight",
+            "image", "image_url",
+            "category", "category_id",
+            "supplier", "supplier_id",
+            "unit", "unit_id",
         ]
 
 
 class OrderItemSerializer(serializers.ModelSerializer):
-    # ✅ pastikan product diterima sebagai PK
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
-
-    # ✅ weight_unit FK: boleh null & optional
     weight_unit = serializers.PrimaryKeyRelatedField(
         queryset=Unit.objects.all(),
         required=False,
         allow_null=True,
     )
-
-    # ✅ NEW: order type per item (DINE_IN/TAKE_OUT/DELIVERY)
-    # Jika tidak dikirim dari frontend, default dari model = TAKE_OUT
     order_type = serializers.ChoiceField(
         choices=OrderItem.OrderType.choices,
         required=False
@@ -142,24 +134,19 @@ class OrderItemSerializer(serializers.ModelSerializer):
 
 
 class OrderSerializer(serializers.ModelSerializer):
-    # ✅ customer optional
     customer = serializers.PrimaryKeyRelatedField(
         queryset=Customer.objects.all(),
         required=False,
         allow_null=True
     )
-
     items = OrderItemSerializer(many=True)
 
-    # ✅ NEW: final order type from client (optional)
-    # NOTE: backend will compute & override based on items (enterprise).
     order_type = serializers.ChoiceField(
         choices=Order.OrderType.choices,
         required=False,
         write_only=True
     )
 
-    # ✅ header fields (optional)
     default_order_type = serializers.ChoiceField(
         choices=Order.OrderType.choices,
         required=False
@@ -173,30 +160,24 @@ class OrderSerializer(serializers.ModelSerializer):
         fields = [
             "id", "customer", "created_at", "payment_method", "subtotal",
             "discount", "tax", "total", "notes", "is_paid",
-
-            # ✅ NEW
-            "order_type",  # write-only (from Android/Vue)
+            "order_type",
             "default_order_type", "table_number", "delivery_address", "delivery_fee",
-
             "items",
         ]
         read_only_fields = ["id", "created_at"]
 
     def validate(self, attrs):
-        # ✅ kalau frontend kirim customer: "" (string kosong), treat as None
         if attrs.get("customer") == "":
             attrs["customer"] = None
 
         items = attrs.get("items") or []
         if len(items) == 0:
-            raise serializers.ValidationError({"items": "Items tidak boleh kosong."})
+            raise serializers.ValidationError({"items": "Items cannot be empty."})
 
-        # ✅ normalize order_type kosong -> TAKE_OUT
         for i in items:
             if not i.get("order_type"):
                 i["order_type"] = OrderItem.OrderType.TAKE_OUT
 
-        # ✅ validation for dine-in / delivery based on items order_type
         has_dine_in = any((i.get("order_type") == "DINE_IN") for i in items)
         has_delivery = any((i.get("order_type") == "DELIVERY") for i in items)
 
@@ -204,40 +185,23 @@ class OrderSerializer(serializers.ModelSerializer):
         delivery_address = (attrs.get("delivery_address") or "").strip()
 
         if has_dine_in and not table_number:
-            raise serializers.ValidationError({"table_number": "Table number wajib untuk item Dine-In."})
+            raise serializers.ValidationError({"table_number": "Table number is required for Dine-In."})
 
         if has_delivery and not delivery_address:
-            raise serializers.ValidationError({"delivery_address": "Delivery address wajib untuk item Delivery."})
+            raise serializers.ValidationError({"delivery_address": "Delivery address is required for Delivery."})
 
         return attrs
 
     @transaction.atomic
     def create(self, validated_data):
         items_data = validated_data.pop("items")
+        validated_data.pop("order_type", None)
 
-        # If client sent "order_type", keep it only for optional mismatch checks, then remove.
-        client_order_type = validated_data.pop("order_type", None)
-
-        # ✅ ALWAYS compute final order type from items (enterprise)
-        types = {
-            (it.get("order_type") or OrderItem.OrderType.TAKE_OUT)
-            for it in items_data
-        }
-        types = {t for t in types if t}  # defensive remove empty
-
-        if len(types) == 1:
-            computed = list(types)[0]  # DINE_IN / TAKE_OUT / DELIVERY
-        else:
-            computed = Order.OrderType.GENERAL  # ✅ mixed -> GENERAL
-
-        # Optional strict check (disable by default)
-        # if client_order_type and client_order_type != computed:
-        #     raise serializers.ValidationError({"order_type": "order_type mismatch vs items."})
-
-        # ✅ set/override header final type
+        types = {(it.get("order_type") or OrderItem.OrderType.TAKE_OUT) for it in items_data}
+        types = {t for t in types if t}
+        computed = list(types)[0] if len(types) == 1 else Order.OrderType.GENERAL
         validated_data["default_order_type"] = computed
 
-        # ✅ ensure delivery_fee default
         if "delivery_fee" not in validated_data:
             validated_data["delivery_fee"] = 0
 
@@ -246,20 +210,34 @@ class OrderSerializer(serializers.ModelSerializer):
         for item_data in items_data:
             product = item_data["product"]
             quantity = int(item_data["quantity"])
-
             product.refresh_from_db()
 
             if product.stock < quantity:
                 raise serializers.ValidationError({
-                    "stock": f"Stok {product.name} tidak cukup. Sisa {product.stock}, minta {quantity}"
+                    "stock": f"Insufficient stock for {product.name}. Remaining {product.stock}, requested {quantity}"
                 })
 
-            # default order_type kalau frontend tidak kirim
             if "order_type" not in item_data:
                 item_data["order_type"] = OrderItem.OrderType.TAKE_OUT
 
+            before = product.stock
+            after = before - quantity
+
             Product.objects.filter(id=product.id).update(stock=F("stock") - quantity)
             OrderItem.objects.create(order=order, **item_data)
+
+            # ✅ inventory history
+            StockMovement.objects.create(
+                product=product,
+                movement_type=StockMovement.Type.SALE,
+                quantity_delta=-quantity,
+                before_stock=before,
+                after_stock=after,
+                note=f"Order #{order.id}",
+                ref_model="Order",
+                ref_id=order.id,
+                created_by=validated_data.get("served_by"),
+            )
 
         return order
 
@@ -282,8 +260,7 @@ class BannerSerializer(serializers.ModelSerializer):
         try:
             if not obj.image:
                 return None
-            url = obj.image.url
-            url = _force_https(url)
+            url = _force_https(obj.image.url)
             return _abs_or_raw(request, url)
         except Exception:
             return None
@@ -312,3 +289,133 @@ class ShopSerializer(serializers.ModelSerializer):
             return _force_https(obj.all_category_icon.url) or ""
         except Exception:
             return ""
+
+
+# ==========================================================
+# Inventory serializers
+# ==========================================================
+class StockAdjustmentSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = StockAdjustment
+        fields = "__all__"
+
+
+class InventoryCountItemSerializer(serializers.ModelSerializer):
+    difference = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = InventoryCountItem
+        fields = ["id", "product", "system_stock", "counted_stock", "difference"]
+
+
+class InventoryCountSerializer(serializers.ModelSerializer):
+    items = InventoryCountItemSerializer(many=True)
+
+    class Meta:
+        model = InventoryCount
+        fields = ["id", "title", "note", "counted_at", "counted_by", "items"]
+
+    @transaction.atomic
+    def create(self, validated_data):
+        items = validated_data.pop("items", [])
+        count = InventoryCount.objects.create(**validated_data)
+
+        for it in items:
+            product = it["product"]
+            product.refresh_from_db()
+
+            system_stock = int(it.get("system_stock", product.stock))
+            counted_stock = int(it.get("counted_stock", product.stock))
+            diff = counted_stock - system_stock
+
+            InventoryCountItem.objects.create(
+                count=count,
+                product=product,
+                system_stock=system_stock,
+                counted_stock=counted_stock
+            )
+
+            if diff != 0:
+                before = product.stock
+                after = counted_stock
+                Product.objects.filter(id=product.id).update(stock=counted_stock)
+
+                StockMovement.objects.create(
+                    product=product,
+                    movement_type=StockMovement.Type.COUNT,
+                    quantity_delta=diff,
+                    before_stock=before,
+                    after_stock=after,
+                    note=f"InventoryCount #{count.id}",
+                    ref_model="InventoryCount",
+                    ref_id=count.id,
+                    created_by=validated_data.get("counted_by"),
+                )
+
+        return count
+
+
+class ProductReturnItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ProductReturnItem
+        fields = ["id", "product", "quantity", "unit_price"]
+
+
+class ProductReturnSerializer(serializers.ModelSerializer):
+    items = ProductReturnItemSerializer(many=True)
+
+    class Meta:
+        model = ProductReturn
+        fields = ["id", "order", "customer", "note", "returned_at", "returned_by", "items"]
+
+    @transaction.atomic
+    def create(self, validated_data):
+        items = validated_data.pop("items", [])
+        ret = ProductReturn.objects.create(**validated_data)
+
+        for it in items:
+            product = it["product"]
+            qty = int(it.get("quantity", 1))
+            unit_price = it.get("unit_price", product.sell_price or 0)
+
+            product.refresh_from_db()
+            before = product.stock
+            after = before + qty
+
+            Product.objects.filter(id=product.id).update(stock=F("stock") + qty)
+
+            ProductReturnItem.objects.create(
+                product_return=ret,
+                product=product,
+                quantity=qty,
+                unit_price=unit_price,
+            )
+
+            StockMovement.objects.create(
+                product=product,
+                movement_type=StockMovement.Type.SALE_RETURN,
+                quantity_delta=qty,
+                before_stock=before,
+                after_stock=after,
+                note=f"ProductReturn #{ret.id}",
+                ref_model="ProductReturn",
+                ref_id=ret.id,
+                created_by=validated_data.get("returned_by"),
+            )
+
+        return ret
+
+
+class StockMovementSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_code = serializers.CharField(source="product.code", read_only=True)
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+
+    class Meta:
+        model = StockMovement
+        fields = [
+            "id", "created_at", "movement_type", "quantity_delta",
+            "before_stock", "after_stock", "note", "ref_model", "ref_id",
+            "product", "product_name", "product_code", "product_sku",
+            "created_by",
+        ]

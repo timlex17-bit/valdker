@@ -1,5 +1,7 @@
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
+from django.db.models import F
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.models import AbstractUser
 from cloudinary.models import CloudinaryField
@@ -28,6 +30,9 @@ class Customer(models.Model):
     email = models.EmailField(blank=True, null=True)
     address = models.TextField(blank=True)
 
+    # ✅ NEW: loyalty points
+    points = models.IntegerField(default=0)
+
     def __str__(self):
         return self.name
 
@@ -47,11 +52,7 @@ class Supplier(models.Model):
 # ========== CATEGORY ==========
 class Category(models.Model):
     name = models.CharField(max_length=100)
-    icon = CloudinaryField(
-        "category_icon",
-        blank=True,
-        null=True
-    )
+    icon = CloudinaryField("category_icon", blank=True, null=True)
 
     def __str__(self):
         return self.name
@@ -67,21 +68,23 @@ class Unit(models.Model):
 # ========== PRODUCT ==========
 class Product(models.Model):
     name = models.CharField(max_length=100)
+
+    # ✅ code = BARCODE (keep for backward compatibility with your current apps)
     code = models.CharField(max_length=50, unique=True)
+
+    # ✅ NEW: SKU (optional but recommended)
+    sku = models.CharField(max_length=50, blank=True, default="", db_index=True)
+
     category = models.ForeignKey(Category, on_delete=models.SET_NULL, null=True)
     description = models.TextField(blank=True)
-    stock = models.IntegerField()
-    buy_price = models.DecimalField(max_digits=10, decimal_places=2)
-    sell_price = models.DecimalField(max_digits=10, decimal_places=2)
-    weight = models.DecimalField(max_digits=10, decimal_places=2)
+    stock = models.IntegerField(default=0)
+    buy_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    sell_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    weight = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True)
     supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True)
 
-    image = CloudinaryField(
-        "product_image",
-        blank=True,
-        null=True
-    )
+    image = CloudinaryField("product_image", blank=True, null=True)
 
     def __str__(self):
         return f"{self.name} ({self.code})"
@@ -89,7 +92,6 @@ class Product(models.Model):
 
 # ========== ORDER ==========
 class Order(models.Model):
-
     class OrderType(models.TextChoices):
         GENERAL = "GENERAL", "General"
         DINE_IN = "DINE_IN", "Dine-In"
@@ -99,14 +101,13 @@ class Order(models.Model):
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     payment_method = models.CharField(max_length=50)
-    subtotal = models.DecimalField(max_digits=10, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     discount = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     tax = models.DecimalField(max_digits=10, decimal_places=2, default=0)
-    total = models.DecimalField(max_digits=10, decimal_places=2)
+    total = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     notes = models.TextField(blank=True)
     is_paid = models.BooleanField(default=True)
 
-    # ✅ header/final order type + extra fields
     default_order_type = models.CharField(
         max_length=20,
         choices=OrderType.choices,
@@ -130,7 +131,6 @@ class Order(models.Model):
 
 
 class OrderItem(models.Model):
-
     class OrderType(models.TextChoices):
         DINE_IN = "DINE_IN", "Dine-In"
         TAKE_OUT = "TAKE_OUT", "Take-Out"
@@ -142,27 +142,6 @@ class OrderItem(models.Model):
     price = models.DecimalField(max_digits=10, decimal_places=2)
     weight_unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True)
 
-    # ✅ per-item order type
-    order_type = models.CharField(
-        max_length=20,
-        choices=OrderType.choices,
-        default=OrderType.TAKE_OUT,
-        db_index=True
-    )
-
-class OrderItem(models.Model):
-    class OrderType(models.TextChoices):
-        DINE_IN = "DINE_IN", "Dine-In"
-        TAKE_OUT = "TAKE_OUT", "Take-Out"
-        DELIVERY = "DELIVERY", "Delivery"
-
-    order = models.ForeignKey(Order, related_name='items', on_delete=models.CASCADE)
-    product = models.ForeignKey(Product, on_delete=models.CASCADE)
-    quantity = models.PositiveIntegerField()
-    price = models.DecimalField(max_digits=10, decimal_places=2)
-    weight_unit = models.ForeignKey(Unit, on_delete=models.SET_NULL, null=True)
-
-    # ✅ NEW: status per item (default TAKE_OUT)
     order_type = models.CharField(
         max_length=20,
         choices=OrderType.choices,
@@ -190,7 +169,6 @@ class Shop(models.Model):
     phone = models.CharField(max_length=20)
     email = models.EmailField(blank=True, null=True)
     logo = CloudinaryField("shop_logo", blank=True, null=True)
-
     all_category_icon = CloudinaryField("all_category_icon", blank=True, null=True)
 
 
@@ -202,6 +180,120 @@ class Banner(models.Model):
 
     def __str__(self):
         return self.title
+
+
+# ==========================================================
+# INVENTORY LEDGER (Inventory History)
+# ==========================================================
+class StockMovement(models.Model):
+    class Type(models.TextChoices):
+        SALE = "SALE", "Sale"
+        SALE_RETURN = "SALE_RETURN", "Sale Return"
+        ADJUSTMENT = "ADJUSTMENT", "Adjustment"
+        COUNT = "COUNT", "Inventory Count"
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="movements")
+    movement_type = models.CharField(max_length=20, choices=Type.choices, db_index=True)
+
+    # Positive = IN, Negative = OUT
+    quantity_delta = models.IntegerField()
+
+    before_stock = models.IntegerField()
+    after_stock = models.IntegerField()
+
+    note = models.CharField(max_length=255, blank=True, default="")
+    ref_model = models.CharField(max_length=50, blank=True, default="")
+    ref_id = models.IntegerField(null=True, blank=True)
+
+    created_at = models.DateTimeField(default=timezone.now, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+
+    def __str__(self):
+        return f"{self.product.name} {self.movement_type} {self.quantity_delta}"
+
+
+# ==========================================================
+# STOCK ADJUSTMENTS
+# ==========================================================
+class StockAdjustment(models.Model):
+    class Reason(models.TextChoices):
+        DAMAGE = "DAMAGE", "Damage"
+        LOST = "LOST", "Lost"
+        FOUND = "FOUND", "Found"
+        CORRECTION = "CORRECTION", "Correction"
+
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    old_stock = models.IntegerField()
+    new_stock = models.IntegerField()
+    reason = models.CharField(max_length=20, choices=Reason.choices, default=Reason.CORRECTION)
+    note = models.CharField(max_length=255, blank=True, default="")
+    adjusted_at = models.DateTimeField(default=timezone.now, db_index=True)
+    adjusted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        ordering = ("-adjusted_at", "-id")
+
+    def __str__(self):
+        return f"Adj {self.product.name} {self.old_stock}->{self.new_stock}"
+
+
+# ==========================================================
+# INVENTORY COUNTS (Stock Opname)
+# ==========================================================
+class InventoryCount(models.Model):
+    title = models.CharField(max_length=120, default="Stock Count")
+    note = models.CharField(max_length=255, blank=True, default="")
+    counted_at = models.DateTimeField(default=timezone.now, db_index=True)
+    counted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        ordering = ("-counted_at", "-id")
+
+    def __str__(self):
+        return f"Count #{self.id} - {self.title}"
+
+
+class InventoryCountItem(models.Model):
+    count = models.ForeignKey(InventoryCount, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    system_stock = models.IntegerField()
+    counted_stock = models.IntegerField()
+
+    @property
+    def difference(self):
+        return self.counted_stock - self.system_stock
+
+
+# ==========================================================
+# PRODUCT RETURN (Sale Return)
+# ==========================================================
+class ProductReturn(models.Model):
+    order = models.ForeignKey(Order, on_delete=models.SET_NULL, null=True, blank=True)
+    customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
+    note = models.CharField(max_length=255, blank=True, default="")
+    returned_at = models.DateTimeField(default=timezone.now, db_index=True)
+    returned_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+
+    class Meta:
+        ordering = ("-returned_at", "-id")
+
+    def __str__(self):
+        return f"Return #{self.id}"
+
+
+class ProductReturnItem(models.Model):
+    product_return = models.ForeignKey(ProductReturn, on_delete=models.CASCADE, related_name="items")
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField(default=1)
+    unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
 
 class TokenProxy(Token):

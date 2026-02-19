@@ -11,6 +11,9 @@ def home(request):
 urlpatterns = [
     path("", home),
 
+    # ✅ barcode print (HARUS sebelum admin/)
+    path("admin/print-barcodes/", admin.site.admin_view(views.admin_print_barcodes), name="admin_print_barcodes"),
+
     # ✅ reports (wajib sebelum admin/)
     path("admin/reports/sales/", admin.site.admin_view(views.sales_report_view), name="admin_sales_report"),
     path("admin/reports/expense/", admin.site.admin_view(views.expense_report_view), name="admin_expense_report"),

@@ -238,6 +238,11 @@ JAZZMIN_SETTINGS = {
         "pos.Banner": "fas fa-image",
         "auth.Group": "fas fa-users",
         "pos.TokenProxy": "fas fa-key",
+        
+        "pos.StockAdjustment": "fas fa-sliders-h",
+        "pos.InventoryCount": "fas fa-clipboard-check",
+        "pos.ProductReturn": "fas fa-undo",
+        "pos.StockMovement": "fas fa-exchange-alt",
     },
     "custom_links": {
         "pos": [
