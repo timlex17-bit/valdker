@@ -161,13 +161,15 @@ class OrderSerializer(serializers.ModelSerializer):
     class Meta:
         model = Order
         fields = [
-            "id", "customer", "created_at", "payment_method", "subtotal",
+            "id",
+            "invoice_number", 
+            "customer", "created_at", "payment_method", "subtotal",
             "discount", "tax", "total", "notes", "is_paid",
             "order_type",
             "default_order_type", "table_number", "delivery_address", "delivery_fee",
             "items",
         ]
-        read_only_fields = ["id", "created_at"]
+        read_only_fields = ["id", "created_at", "invoice_number"]  # ✅ invoice auto
 
     def validate(self, attrs):
         if attrs.get("customer") == "":

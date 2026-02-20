@@ -144,10 +144,18 @@ class ProductAdmin(admin.ModelAdmin):
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = (
-        "id", "customer_name", "invoice_id", "order_type", "total",
-        "payment_method", "created_at_formatted", "served_by", "is_paid", "receipt_link"
+        "invoice_number",  
+        "id",
+        "customer_name",
+        "order_type",
+        "total",
+        "payment_method",
+        "created_at_formatted",
+        "served_by",
+        "is_paid",
+        "receipt_link",
     )
-    search_fields = ("customer__name", "id")
+    search_fields = ("invoice_number", "customer__name", "id")
     list_filter = ("payment_method", "is_paid", "default_order_type")
     ordering = ("-created_at",)
     exclude = ("served_by",)
@@ -155,10 +163,6 @@ class OrderAdmin(admin.ModelAdmin):
     def customer_name(self, obj):
         return obj.customer.name if obj.customer else "Walk In Customer"
     customer_name.short_description = "Name"
-
-    def invoice_id(self, obj):
-        return f"INV{obj.id:015d}"
-    invoice_id.short_description = "Invoice ID"
 
     def order_type(self, obj):
         try:
@@ -180,7 +184,7 @@ class OrderAdmin(admin.ModelAdmin):
 
     def receipt_link(self, obj):
         url = reverse("order_receipt_pdf", args=[obj.id])
-        return format_html(f'<a class="button" href="{url}" target="_blank">🧾</a>')
+        return format_html('<a class="button" href="{}" target="_blank">🧾</a>', url)
     receipt_link.short_description = "Receipt"
 
     def get_queryset(self, request):
@@ -193,7 +197,6 @@ class OrderAdmin(admin.ModelAdmin):
         if not obj.served_by_id:
             obj.served_by = request.user
         super().save_model(request, obj, form, change)
-
 
 @admin.register(Banner)
 class BannerAdmin(admin.ModelAdmin):

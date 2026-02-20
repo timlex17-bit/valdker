@@ -98,6 +98,15 @@ class Order(models.Model):
         TAKE_OUT = "TAKE_OUT", "Take-Out"
         DELIVERY = "DELIVERY", "Delivery"
 
+    # ✅ NEW: invoice number (stable, professional)
+    invoice_number = models.CharField(
+        max_length=32,
+        unique=True,
+        blank=True,
+        db_index=True,
+        help_text="Auto generated invoice number. Example: INV000000000123"
+    )
+
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     payment_method = models.CharField(max_length=50)
@@ -126,8 +135,24 @@ class Order(models.Model):
         related_name='orders'
     )
 
+    def generate_invoice_number(self) -> str:
+        # Format professional: INV + 12 digit
+        return f"INV{self.pk:012d}"
+
+    def save(self, *args, **kwargs):
+        creating = self.pk is None
+        super().save(*args, **kwargs)
+
+        # After we have pk, generate invoice once
+        if (creating or not self.invoice_number) and self.pk:
+            inv = self.generate_invoice_number()
+            if self.invoice_number != inv:
+                Order.objects.filter(pk=self.pk).update(invoice_number=inv)
+                self.invoice_number = inv
+
     def __str__(self):
-        return f"Order #{self.id}"
+        # tampilkan invoice biar enak dibaca di admin
+        return self.invoice_number or f"Order #{self.id}"
 
 
 class OrderItem(models.Model):
