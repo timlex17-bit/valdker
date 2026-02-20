@@ -98,12 +98,11 @@ class Order(models.Model):
         TAKE_OUT = "TAKE_OUT", "Take-Out"
         DELIVERY = "DELIVERY", "Delivery"
 
-    # ✅ NEW: invoice number (stable, professional)
     invoice_number = models.CharField(
         max_length=32,
         unique=True,
-        blank=True,
         db_index=True,
+        editable=False,
         help_text="Auto generated invoice number. Example: INV000000000123"
     )
 
