@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.db import transaction
 from django.db.models import F
+from django.contrib.auth import get_user_model
 
 from .models import (
     Customer, Supplier, Product, Category, Unit, Banner,
@@ -8,6 +9,8 @@ from .models import (
     StockAdjustment, InventoryCount, InventoryCountItem,
     ProductReturn, ProductReturnItem, StockMovement
 )
+
+User = get_user_model()
 
 
 def _force_https(url: str | None) -> str | None:
@@ -294,6 +297,29 @@ class ShopSerializer(serializers.ModelSerializer):
 # ==========================================================
 # Inventory serializers
 # ==========================================================
+
+class ProductLiteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Product
+        fields = ["id", "name", "code", "sku", "sell_price"]
+
+
+class CustomerLiteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Customer
+        fields = ["id", "name"]
+
+
+class UserLiteSerializer(serializers.ModelSerializer):
+    display_name = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "username", "display_name"]
+
+    def get_display_name(self, obj):
+        return getattr(obj, "full_name", "") or obj.username
+
 class StockAdjustmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockAdjustment
@@ -310,6 +336,27 @@ class InventoryCountItemSerializer(serializers.ModelSerializer):
 
 class InventoryCountSerializer(serializers.ModelSerializer):
     items = InventoryCountItemSerializer(many=True)
+    
+    class UserLiteSerializer(serializers.ModelSerializer):
+        display_name = serializers.SerializerMethodField()
+
+        class Meta:
+            model = User
+            fields = ["id", "username", "display_name"]
+
+        def get_display_name(self, obj):
+            return getattr(obj, "full_name", "") or obj.username
+
+    class ProductLiteSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = Product
+            fields = ["id", "name", "code", "sku", "sell_price"]
+
+
+    class CustomerLiteSerializer(serializers.ModelSerializer):
+        class Meta:
+            model = Customer
+            fields = ["id", "name"]
 
     class Meta:
         model = InventoryCount
@@ -356,21 +403,70 @@ class InventoryCountSerializer(serializers.ModelSerializer):
 
 
 class ProductReturnItemSerializer(serializers.ModelSerializer):
+    # READ: tampilkan object product (nama, sku, dll)
+    product = ProductLiteSerializer(read_only=True)
+
+    # WRITE: tetap boleh kirim product_id (recommended)
+    product_id = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(),
+        source="product",
+        write_only=True,
+        required=False
+    )
+
+    # COMPAT: kalau client lama masih kirim "product": 3 (int), tetap diterima
+    product_pk = serializers.PrimaryKeyRelatedField(
+        queryset=Product.objects.all(),
+        source="product",
+        write_only=True,
+        required=False
+    )
+
     class Meta:
         model = ProductReturnItem
-        fields = ["id", "product", "quantity", "unit_price"]
+        fields = ["id", "product", "product_id", "product_pk", "quantity", "unit_price"]
+
+    def validate(self, attrs):
+        # pastikan minimal ada product dari salah satu field
+        if "product" not in attrs:
+            raise serializers.ValidationError({"product_id": "product_id/product is required"})
+        return attrs
 
 
 class ProductReturnSerializer(serializers.ModelSerializer):
+    # READ
+    returned_by = UserLiteSerializer(read_only=True)
+
+    customer = CustomerLiteSerializer(read_only=True)
+    customer_id = serializers.PrimaryKeyRelatedField(
+        queryset=Customer.objects.all(),
+        source="customer",
+        write_only=True,
+        required=False,
+        allow_null=True
+    )
+
     items = ProductReturnItemSerializer(many=True)
 
     class Meta:
         model = ProductReturn
-        fields = ["id", "order", "customer", "note", "returned_at", "returned_by", "items"]
+        fields = [
+            "id",
+            "order",
+            "customer",
+            "customer_id",
+            "note",
+            "returned_at",
+            "returned_by",
+            "items",
+        ]
+        read_only_fields = ["id", "returned_at", "returned_by"]
 
     @transaction.atomic
     def create(self, validated_data):
         items = validated_data.pop("items", [])
+
+        # returned_by sebaiknya di-set dari viewset perform_create()
         ret = ProductReturn.objects.create(**validated_data)
 
         for it in items:
