@@ -13,6 +13,13 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='order',
             name='invoice_number',
-            field=models.CharField(blank=True, db_index=True, help_text='Auto generated invoice number. Example: INV000000000123', max_length=32, unique=True),
+            field=models.CharField(
+                max_length=32,
+                blank=True,
+                null=True,              
+                db_index=True,
+                help_text='Auto generated invoice number. Example: INV000000000123',
+            ),
         ),
     ]
+
