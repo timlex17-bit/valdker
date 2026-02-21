@@ -449,12 +449,15 @@ class ProductReturnSerializer(serializers.ModelSerializer):
     )
 
     items = ProductReturnItemSerializer(many=True)
+    
+    invoice_number = serializers.CharField(source="order.invoice_number", read_only=True)
 
     class Meta:
         model = ProductReturn
         fields = [
             "id",
             "order",
+            "invoice_number",
             "customer",
             "customer_id",
             "note",
