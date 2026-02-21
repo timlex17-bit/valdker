@@ -1,45 +1,32 @@
 from decimal import Decimal
-from django.db.models import Sum, Count, F, DecimalField, ExpressionWrapper, Value
+from django.db.models import Sum, Count, F, DecimalField, ExpressionWrapper, Value, IntegerField
 from django.db.models.functions import Coalesce
 
 from pos.models import Order, OrderItem, Expense, Product, StockMovement
 
 
 # =========================================================
-# CONSTANTS (Decimal-safe)
+# CONSTANTS
 # =========================================================
-DEC0 = Value(
-    Decimal("0.00"),
-    output_field=DecimalField(max_digits=18, decimal_places=2)
-)
+DEC0 = Value(Decimal("0.00"), output_field=DecimalField(max_digits=18, decimal_places=2))
+INT0 = Value(0, output_field=IntegerField())
 
 
 # =========================================================
 # HELPERS
 # =========================================================
-def money(v) -> str:
-    """
-    Format money as $1,234.56 (always safe).
-    """
-    if v is None:
-        v = Decimal("0.00")
-    try:
-        v = Decimal(str(v))
-    except Exception:
-        v = Decimal("0.00")
-    return f"${v:,.2f}"
-
-
 def _to_decimal(v) -> Decimal:
-    """
-    Force value into Decimal safely.
-    """
     if v is None:
         return Decimal("0.00")
     try:
         return Decimal(str(v))
     except Exception:
         return Decimal("0.00")
+
+
+def money(v) -> str:
+    v = _to_decimal(v)
+    return f"${v:,.2f}"
 
 
 def _paid_orders_qs(dr):
@@ -56,15 +43,13 @@ def _paid_orders_qs(dr):
 
 
 # =========================================================
-# SALES
+# SALES / INCOME
 # =========================================================
 def sales_summary(dr):
     qs = _paid_orders_qs(dr)
 
     agg = qs.aggregate(
         orders=Count("id"),
-
-        # ✅ Decimal-safe aggregates
         net_sales=Coalesce(Sum("total"), DEC0),
         subtotal=Coalesce(Sum("subtotal"), DEC0),
         tax=Coalesce(Sum("tax"), DEC0),
@@ -92,18 +77,24 @@ def orders_kpi(dr):
 
 
 # =========================================================
-# EXPENSE
+# EXPENSE (IMPORTANT: Expense model has date+time, NO created_at)
 # =========================================================
 def expense_summary(dr):
+    """
+    ✅ Expense fields:
+    - amount (Decimal)
+    - date (DateField)
+    - time (TimeField)
+    """
+    start_date = dr.start.date()
+    end_date = dr.end.date()  # end is exclusive
+
     qs = Expense.objects.filter(
-        created_at__gte=dr.start,
-        created_at__lt=dr.end,
+        date__gte=start_date,
+        date__lt=end_date,
     )
 
-    # ✅ MUST: Coalesce to DEC0 so never None
-    total = qs.aggregate(
-        total=Coalesce(Sum("amount"), DEC0)
-    ).get("total")
+    total = qs.aggregate(total=Coalesce(Sum("amount"), DEC0)).get("total")
 
     top_qs = (
         qs.values("name")
@@ -118,7 +109,7 @@ def expense_summary(dr):
 
 
 # =========================================================
-# PROFIT
+# PROFIT (Net Sales - Expense)
 # =========================================================
 def profit_summary(dr):
     s = sales_summary(dr)
@@ -142,8 +133,8 @@ def profit_summary(dr):
 # =========================================================
 def top_products(dr):
     """
-    ✅ OrderItem fields kamu:
-    - quantity (Integer)
+    ✅ OrderItem fields:
+    - quantity (PositiveInteger)
     - price (Decimal)
     Revenue = Sum(quantity * price)
     """
@@ -161,7 +152,7 @@ def top_products(dr):
         )
         .values("product_id", "product__name")
         .annotate(
-            qty=Coalesce(Sum("quantity"), 0),
+            qty=Coalesce(Sum("quantity"), INT0),
             revenue=Coalesce(Sum(revenue_expr), DEC0),
         )
         .order_by("-qty")[:5]
@@ -181,38 +172,29 @@ def top_products(dr):
 # =========================================================
 # STOCK ALERTS
 # =========================================================
-def stock_alert():
+def stock_alert(threshold: int = 5):
     """
-    ⚠️ Stok menipis: stock < min_stock
-    ✅ Aman jika min_stock NULL (di-skip)
+    Karena Product model kamu belum punya min_stock,
+    maka "stok menipis" pakai threshold default.
+
+    ✅ default: stock <= 5
     """
     qs = (
         Product.objects
-        .filter(min_stock__isnull=False)     # ✅ prevent NULL min_stock issues
-        .filter(stock__lt=F("min_stock"))
-        .order_by("stock")[:50]
+        .filter(stock__lte=threshold)
+        .order_by("stock", "name")[:50]
     )
 
     return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "stock": int(p.stock) if p.stock is not None else 0,
-            "min_stock": int(p.min_stock) if p.min_stock is not None else 0
-        }
+        {"id": p.id, "name": p.name, "stock": int(p.stock or 0), "min_stock": threshold}
         for p in qs
     ]
 
 
 def stock_out():
-    qs = Product.objects.filter(stock__lte=0).order_by("stock")[:50]
+    qs = Product.objects.filter(stock__lte=0).order_by("stock", "name")[:50]
     return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "stock": int(p.stock) if p.stock is not None else 0,
-            "min_stock": int(p.min_stock) if p.min_stock is not None else 0
-        }
+        {"id": p.id, "name": p.name, "stock": int(p.stock or 0), "min_stock": 0}
         for p in qs
     ]
 
@@ -220,12 +202,7 @@ def stock_out():
 def stock_item_by_name(name: str):
     qs = Product.objects.filter(name__icontains=name).order_by("name")[:10]
     return [
-        {
-            "id": p.id,
-            "name": p.name,
-            "stock": int(p.stock) if p.stock is not None else 0,
-            "min_stock": int(p.min_stock) if p.min_stock is not None else 0
-        }
+        {"id": p.id, "name": p.name, "stock": int(p.stock or 0), "min_stock": None}
         for p in qs
     ]
 
@@ -234,17 +211,11 @@ def stock_item_by_name(name: str):
 # INVENTORY MOVEMENT
 # =========================================================
 def inventory_movement(dr):
-    qs = StockMovement.objects.filter(
-        created_at__gte=dr.start,
-        created_at__lt=dr.end
-    )
+    qs = StockMovement.objects.filter(created_at__gte=dr.start, created_at__lt=dr.end)
 
     by_type = (
         qs.values("movement_type")
-        .annotate(
-            count=Count("id"),
-            qty=Coalesce(Sum("quantity_delta"), 0)
-        )
+        .annotate(count=Count("id"), qty=Coalesce(Sum("quantity_delta"), INT0))
         .order_by("-count")
     )
 
@@ -252,11 +223,7 @@ def inventory_movement(dr):
 
     return {
         "by_type": [
-            {
-                "type": x["movement_type"],
-                "count": int(x["count"] or 0),
-                "qty": int(x["qty"] or 0),
-            }
+            {"type": x["movement_type"], "count": int(x["count"] or 0), "qty": int(x["qty"] or 0)}
             for x in by_type
         ],
         "recent": [
@@ -264,7 +231,7 @@ def inventory_movement(dr):
                 "id": m.id,
                 "at": m.created_at,
                 "type": m.movement_type,
-                "product": getattr(m, "product_name", None) or getattr(m.product, "name", ""),
+                "product": getattr(m.product, "name", ""),
                 "delta": int(m.quantity_delta or 0),
                 "before": int(m.before_stock) if m.before_stock is not None else None,
                 "after": int(m.after_stock) if m.after_stock is not None else None,
