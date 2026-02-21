@@ -1,8 +1,12 @@
 from decimal import Decimal
-from django.db.models import Sum, Count, F, DecimalField, ExpressionWrapper
+from django.db.models import Sum, Count, F, DecimalField, ExpressionWrapper, Value
 from django.db.models.functions import Coalesce
-from django.db.models import DecimalField, ExpressionWrapper, Value
 from pos.models import Order, OrderItem, Expense, Product, StockMovement
+
+DEC0 = Value(
+    0,
+    output_field=DecimalField(max_digits=18, decimal_places=2)
+)
 
 def money(v) -> str:
     if v is None:
@@ -32,11 +36,13 @@ def sales_summary(dr):
 
     agg = qs.aggregate(
         orders=Count("id"),
-        net_sales=Coalesce(Sum("total"), 0),   # ✅ total adalah net sales kamu
-        subtotal=Coalesce(Sum("subtotal"), 0),
-        tax=Coalesce(Sum("tax"), 0),
-        discount=Coalesce(Sum("discount"), 0),
-        delivery_fee=Coalesce(Sum("delivery_fee"), 0),
+
+        # ✅ FIX: Decimal Coalesce must return Decimal
+        net_sales=Coalesce(Sum("total"), DEC0),
+        subtotal=Coalesce(Sum("subtotal"), DEC0),
+        tax=Coalesce(Sum("tax"), DEC0),
+        discount=Coalesce(Sum("discount"), DEC0),
+        delivery_fee=Coalesce(Sum("delivery_fee"), DEC0),
     )
 
     orders = int(agg["orders"] or 0)
@@ -53,35 +59,28 @@ def sales_summary(dr):
         "delivery_fee": Decimal(agg["delivery_fee"] or 0),
     }
 
-
 def orders_kpi(dr):
     return sales_summary(dr)
 
 
 def expense_summary(dr):
-    """
-    ✅ Pastikan model Expense punya:
-    - created_at (atau date)
-    - amount
-    - name
-    Kalau berbeda, kirim field list Expense nanti saya sesuaikan.
-    """
     qs = Expense.objects.filter(
         created_at__gte=dr.start,
         created_at__lt=dr.end,
     )
 
-    total = qs.aggregate(total=Coalesce(Sum("amount"), 0))["total"] or 0
+    # ✅ FIX: Decimal Coalesce must return Decimal
+    total = qs.aggregate(total=Coalesce(Sum("amount"), DEC0))["total"] or Decimal("0")
 
     top = (
         qs.values("name")
-        .annotate(total=Coalesce(Sum("amount"), 0))
+        .annotate(total=Coalesce(Sum("amount"), DEC0))
         .order_by("-total")[:5]
     )
 
     return {
         "total": Decimal(total),
-        "top": [{"name": x["name"], "amount": Decimal(x["total"])} for x in top]
+        "top": [{"name": x["name"], "amount": Decimal(x["total"] or 0)} for x in top]
     }
 
 
