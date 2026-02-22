@@ -14,7 +14,9 @@ from pos.api.serializers_shift import ShiftSerializer
 from pos.services.shift_service import recompute_shift_totals
 
 # ✅ pastikan field total order benar
-ORDER_TOTAL_FIELD = "total"  # ganti kalau beda: total_amount / grand_total / net_total
+# ganti kalau beda: total_amount / grand_total / net_total
+ORDER_TOTAL_FIELD = "total"
+
 
 def resolve_shop_id(request) -> int | None:
     """
@@ -40,15 +42,16 @@ def resolve_shop_id(request) -> int | None:
     return int(shop.id) if shop else None
 
 
-def find_open_shift(shop_id: int, user):
+def find_open_shift(shop_id: int):
     """
-    ✅ SATU PINTU cari shift OPEN
+    ✅ SATU PINTU cari shift OPEN (PER SHOP)
     """
-    return Shift.objects.filter(
-        shop_id=shop_id,
-        cashier=user,
-        status=ShiftStatus.OPEN
-    ).order_by("-opened_at", "-id").first()
+    return (
+        Shift.objects
+        .filter(shop_id=shop_id, status=ShiftStatus.OPEN)
+        .order_by("-opened_at", "-id")
+        .first()
+    )
 
 
 class ShiftCurrentView(APIView):
@@ -60,7 +63,7 @@ class ShiftCurrentView(APIView):
         if not shop_id:
             return Response({"detail": "shop_id tidak ditemukan."}, status=400)
 
-        shift = find_open_shift(shop_id, request.user)
+        shift = find_open_shift(shop_id)
         if not shift:
             return Response({"open": False, "shift": None, "shop_id": shop_id}, status=200)
 
@@ -85,9 +88,8 @@ class ShiftOpenView(APIView):
         except Exception:
             return Response({"detail": "opening_cash tidak valid."}, status=400)
 
-        existing = find_open_shift(shop_id, request.user)
+        existing = find_open_shift(shop_id)
         if existing:
-            # ✅ ini yang menyebabkan 409 di Android
             return Response(
                 {"detail": "Shift masih OPEN.", "shift": ShiftSerializer(existing).data, "shop_id": shop_id},
                 status=409
@@ -95,7 +97,7 @@ class ShiftOpenView(APIView):
 
         shift = Shift.objects.create(
             shop_id=shop_id,
-            cashier=request.user,
+            cashier=request.user,  # ✅ tetap simpan siapa yang buka
             status=ShiftStatus.OPEN,
             opening_cash=opening_cash,
             note=note,
@@ -125,7 +127,7 @@ class ShiftCloseView(APIView):
         except Exception:
             return Response({"detail": "closing_cash tidak valid."}, status=400)
 
-        shift = find_open_shift(shop_id, request.user)
+        shift = find_open_shift(shop_id)
         if not shift:
             return Response({"detail": "Tidak ada shift OPEN.", "shop_id": shop_id}, status=404)
 
@@ -149,7 +151,12 @@ class ShiftListView(APIView):
         if not shop_id:
             return Response({"detail": "shop_id tidak ditemukan."}, status=400)
 
-        qs = Shift.objects.filter(shop_id=shop_id).select_related("cashier").order_by("-opened_at", "-id")[:200]
+        qs = (
+            Shift.objects
+            .filter(shop_id=shop_id)
+            .select_related("cashier")
+            .order_by("-opened_at", "-id")[:200]
+        )
         return Response(ShiftSerializer(qs, many=True).data, status=200)
 
 
