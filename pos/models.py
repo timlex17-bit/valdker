@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 from django.db.models import F
+from .models_shift import Shift, ShiftStatus
 from rest_framework.authtoken.models import Token
 from django.contrib.auth.models import AbstractUser
 from cloudinary.models import CloudinaryField

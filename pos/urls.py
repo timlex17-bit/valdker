@@ -39,5 +39,9 @@ urlpatterns = [
 
     path("products/print-barcodes/", views.api_print_barcodes, name="api_print_barcodes"),
 
+    # ✅ IMPORTANT: include shift + finance endpoints
+    path("", include("pos.api.urls")),
+
+    # DRF router endpoints
     path("", include(router.urls)),
 ]

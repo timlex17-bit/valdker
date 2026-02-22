@@ -7,6 +7,7 @@ from django.utils.html import format_html
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from pos.models_shift import Shift
 from reportlab.graphics.barcode import code128
 
 from .models import (
@@ -291,6 +292,11 @@ class CustomUserAdmin(UserAdmin):
 
         return form
 
+@admin.register(Shift)
+class ShiftAdmin(admin.ModelAdmin):
+    list_display = ("id", "shop", "cashier", "status", "opened_at", "closed_at", "opening_cash", "closing_cash", "expected_cash", "cash_difference")
+    list_filter = ("status", "shop", "opened_at")
+    search_fields = ("cashier__username", "cashier__email")
 
 @admin.register(TokenProxy)
 class TokenProxyAdmin(admin.ModelAdmin):
