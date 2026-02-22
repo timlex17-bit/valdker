@@ -1,3 +1,4 @@
+# pos/api/views_finance.py
 from decimal import Decimal
 
 from django.utils import timezone
@@ -23,41 +24,47 @@ def field_exists(model, name: str) -> bool:
 
 
 def list_model_fields(model):
-    # only concrete fields (no reverse relations)
     return [f.name for f in model._meta.fields]
 
 
-def get_shop_id_from_request(request):
-    # ✅ opsi 1: user punya shop_id
+def resolve_shop_id(request) -> int | None:
+    """
+    ✅ Fix utama:
+    - Prioritas: query param shop_id (optional)
+    - Lalu: request.user.shop_id jika ada
+    - Fallback: Shop pertama di DB
+    """
+    # 0) optional override
+    q = request.query_params.get("shop_id")
+    if q:
+        try:
+            return int(q)
+        except ValueError:
+            pass
+
+    # 1) user.shop_id (kalau kamu punya multi-tenant nanti)
     if hasattr(request.user, "shop_id") and request.user.shop_id:
         return request.user.shop_id
 
-    # ✅ opsi 2: single shop fallback
-    shop = Shop.objects.first()
+    # 2) fallback: shop pertama
+    shop = Shop.objects.order_by("id").first()
     return shop.id if shop else None
 
 
 def apply_shop_filter(qs, shop_id):
-    """
-    Coba beberapa kemungkinan nama field shop di Order.
-    """
     if not shop_id:
         return qs
 
-    # paling umum: shop (FK)
     if field_exists(Order, "shop"):
         return qs.filter(shop_id=shop_id)
 
-    # kadang shop_id disimpan langsung sebagai int
     if field_exists(Order, "shop_id"):
         return qs.filter(shop_id=shop_id)
 
-    # alternatif naming
     for name in ["store", "outlet", "branch"]:
         if field_exists(Order, name):
             return qs.filter(**{f"{name}_id": shop_id})
 
-    # kalau tidak ada field shop sama sekali -> biarkan tanpa filter
     return qs
 
 
@@ -83,9 +90,11 @@ class FinanceSummaryAPIView(APIView):
         if range_ != "today":
             range_ = "today"
 
-        shop_id = get_shop_id_from_request(request)
+        shop_id = resolve_shop_id(request)
         if not shop_id:
-            return Response({"detail": "Shop tidak ditemukan."}, status=400)
+            return Response({
+                "detail": "Shop belum ada di database. Buat 1 Shop dulu."
+            }, status=400)
 
         today = timezone.localdate()
 
@@ -95,7 +104,7 @@ class FinanceSummaryAPIView(APIView):
         date_field = pick_date_field()
         if not date_field:
             return Response({
-                "detail": "Tidak menemukan field tanggal di Order (created_at/date/ordered_at, dll).",
+                "detail": "Field tanggal Order tidak ditemukan.",
                 "order_fields": list_model_fields(Order),
             }, status=500)
 
@@ -104,7 +113,7 @@ class FinanceSummaryAPIView(APIView):
         total_field = pick_total_field()
         if not total_field:
             return Response({
-                "detail": "Tidak menemukan field total di Order (total/grand_total/total_price, dll).",
+                "detail": "Field total Order tidak ditemukan.",
                 "order_fields": list_model_fields(Order),
             }, status=500)
 
@@ -117,12 +126,9 @@ class FinanceSummaryAPIView(APIView):
             "range": "today",
             "from": str(today),
             "to": str(today),
-
-            # ✅ sales summary (optional)
             "total_sales_today": str(total_sales),
             "order_count_today": order_count,
-
-            # ✅ SHIFT fields untuk Android Dashboard
             "shift_opening_cash": str(opening_cash),
             "shift_id": shift_id,
+            "shop_id": shop_id,
         })
