@@ -8,8 +8,10 @@ from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.auth.decorators import login_required
 from django.contrib.admin.views.decorators import staff_member_required
+from pos.permissions import IsSuperAdminOnly, AdminOnlyWriteOrRead
 from django.http import HttpResponse
 from django.contrib.auth import authenticate
+from pos.permissions import IsSuperAdminOnly
 from django.db import models
 from django.db.models import Sum, Value, DecimalField, F, ExpressionWrapper
 from django.db.models.functions import Coalesce, TruncDate, TruncMonth
@@ -28,6 +30,9 @@ from rest_framework.permissions import IsAuthenticated, AllowAny
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
+
+from rest_framework.permissions import IsAuthenticated
+from decimal import Decimal
 
 from xhtml2pdf import pisa
 
@@ -48,6 +53,133 @@ from .serializers import (
     StockAdjustmentSerializer, InventoryCountSerializer, ProductReturnSerializer, StockMovementSerializer
 )
 
+# =========================
+# Profit APIs (ADMIN only)
+# =========================
+from decimal import Decimal
+
+class DailyProfitReportAPIView(APIView):
+    permission_classes = [IsSuperAdminOnly]
+
+    def get(self, request):
+        start = parse_date(request.GET.get("start") or "")
+        end = parse_date(request.GET.get("end") or "")
+
+        today = timezone.localdate()
+        if not end:
+            end = today
+        if not start:
+            start = end - timedelta(days=13)
+
+        sales_qs = (
+            Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
+            .annotate(d=TruncDate("created_at"))
+            .values("d")
+            .annotate(total=Coalesce(Sum("total"), Value(0), output_field=DecimalField(max_digits=18, decimal_places=2)))
+            .order_by("d")
+        )
+
+        exp_qs = (
+            Expense.objects.filter(date__gte=start, date__lte=end)
+            .values("date")
+            .annotate(total=Coalesce(Sum("amount"), Value(0), output_field=DecimalField(max_digits=18, decimal_places=2)))
+            .order_by("date")
+        )
+
+        sales_map = {row["d"]: row["total"] for row in sales_qs}
+        exp_map = {row["date"]: row["total"] for row in exp_qs}
+        all_days = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
+
+        rows = []
+        total_sales = Decimal("0")
+        total_exp = Decimal("0")
+
+        for d in all_days:
+            s = sales_map.get(d, Decimal("0"))
+            e = exp_map.get(d, Decimal("0"))
+            p = s - e
+            total_sales += s
+            total_exp += e
+
+            rows.append({
+                "date": d.isoformat(),
+                "sales": float(s),
+                "expense": float(e),
+                "profit": float(p),
+            })
+
+        return Response({
+            "range": {"start": start.isoformat(), "end": end.isoformat()},
+            "summary": {
+                "sales": float(total_sales),
+                "expense": float(total_exp),
+                "profit": float(total_sales - total_exp),
+            },
+            "rows": rows
+        })
+
+
+class MonthlyPLReportAPIView(APIView):
+    permission_classes = [IsSuperAdminOnly]
+
+    def get(self, request):
+        start = parse_date(request.GET.get("start") or "")
+        end = parse_date(request.GET.get("end") or "")
+
+        today = date.today()
+        if not start:
+            start = date(today.year, 1, 1)
+        if not end:
+            end = date(today.year, 12, 31)
+
+        sales_qs = (
+            Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
+            .annotate(m=TruncMonth("created_at"))
+            .values("m")
+            .annotate(total=Coalesce(Sum("total"), Value(0), output_field=DecimalField(max_digits=18, decimal_places=2)))
+            .order_by("m")
+        )
+
+        exp_qs = (
+            Expense.objects.filter(date__gte=start, date__lte=end)
+            .annotate(m=TruncMonth("date"))
+            .values("m")
+            .annotate(total=Coalesce(Sum("amount"), Value(0), output_field=DecimalField(max_digits=18, decimal_places=2)))
+            .order_by("m")
+        )
+
+        sales_map = {row["m"]: row["total"] for row in sales_qs}
+        exp_map = {row["m"]: row["total"] for row in exp_qs}
+        all_months = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
+
+        rows = []
+        total_sales = Decimal("0")
+        total_exp = Decimal("0")
+
+        for m in all_months:
+            s = sales_map.get(m, Decimal("0"))
+            e = exp_map.get(m, Decimal("0"))
+            p = s - e
+
+            total_sales += s
+            total_exp += e
+
+            rows.append({
+                "month": m.strftime("%Y-%m"),
+                "sales": float(s),
+                "expense": float(e),
+                "profit": float(p),
+            })
+
+        return Response({
+            "range": {"start": start.isoformat(), "end": end.isoformat()},
+            "summary": {
+                "sales": float(total_sales),
+                "expense": float(total_exp),
+                "profit": float(total_sales - total_exp),
+            },
+            "rows": rows
+        })
 
 # =========================
 # Helpers for Admin/Jazzmin
@@ -439,8 +571,8 @@ EXPENSE_AMOUNT_FIELD = "amount"
 # =========================
 # Profit APIs (needed by pos/urls.py import)
 # =========================
-class DailyProfitReportAPIView(APIView):
-    permission_classes = [IsAuthenticated]
+class MonthlyPLReportAPIView(APIView):
+    permission_classes = [IsSuperAdminOnly]
 
     def get(self, request):
         start = parse_date(request.GET.get("start") or "")
@@ -562,7 +694,7 @@ class MonthlyPLReportAPIView(APIView):
 
 @api_view(["GET"])
 @authentication_classes([TokenAuthentication])
-@permission_classes([IsAuthenticated])
+@permission_classes([IsSuperAdminOnly])
 def net_income_today(request):
     today = timezone.localdate()
     dec = DecimalField(max_digits=12, decimal_places=2)
@@ -654,15 +786,16 @@ class ExpenseViewSet(viewsets.ModelViewSet):
     serializer_class = ExpenseSerializer
     permission_classes = [IsAuthenticated]
 
-
 class BannerViewSet(ModelViewSet):
     queryset = Banner.objects.all()
     serializer_class = BannerSerializer
+    permission_classes = [AdminOnlyWriteOrRead]
 
 
-class ShopViewSet(viewsets.ModelViewSet):
-    queryset = Shop.objects.all().order_by("-id")
-    serializer_class = ShopSerializer
+class UnitViewSet(viewsets.ModelViewSet):
+    queryset = Unit.objects.all().order_by("name")
+    serializer_class = UnitSerializer
+    permission_classes = [AdminOnlyWriteOrRead]
 
     def get_serializer_context(self):
         return {"request": self.request}
@@ -945,6 +1078,18 @@ def admin_print_barcodes(request):
 # =========================
 # Auth API
 # =========================
+
+def build_permissions_for_user(user):
+    # simple & stable
+    # only admin can access: reports, settings, owner_chat
+    perms = {
+        "reports.view": bool(user.is_superuser),
+        "settings.manage": bool(user.is_superuser),
+        "owner_chat.use": bool(user.is_superuser),
+    }
+    # Convert to list of enabled codes for Android
+    return [k for k, v in perms.items() if v]
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def api_login(request):
@@ -960,6 +1105,8 @@ def api_login(request):
 
     token, _ = Token.objects.get_or_create(user=user)
 
+    permissions = build_permissions_for_user(user)
+
     return Response({
         "token": token.key,
         "user": {
@@ -969,5 +1116,14 @@ def api_login(request):
             "role": getattr(user, "role", "") or "",
             "is_staff": getattr(user, "is_staff", False),
             "is_superuser": getattr(user, "is_superuser", False),
-        }
+        },
+        "permissions": permissions
     }, status=200)
+
+# =========================
+# Shop API
+# =========================
+class ShopViewSet(viewsets.ModelViewSet):
+    queryset = Shop.objects.all().order_by("-id")
+    serializer_class = ShopSerializer
+    permission_classes = [IsAuthenticated]

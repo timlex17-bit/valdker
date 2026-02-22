@@ -1,11 +1,8 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
-from django.http import HttpResponseRedirect
-from django.urls import reverse, path
-from django.http import HttpResponse
+from django.http import HttpResponseRedirect, HttpResponse
+from django.urls import reverse
 from django.utils.html import format_html
-from django.shortcuts import redirect
-from django.utils import timezone
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
@@ -39,7 +36,6 @@ def print_barcodes_pdf(modeladmin, request, queryset):
     c = canvas.Canvas(resp, pagesize=A4)
     width, height = A4
 
-    # Label layout (simple grid)
     label_w = 70 * mm
     label_h = 35 * mm
     margin_x = 10 * mm
@@ -55,11 +51,10 @@ def print_barcodes_pdf(modeladmin, request, queryset):
     y = height - margin_y - label_h
 
     def draw_label(prod: Product, x0, y0):
-        # Border (optional; comment if you dislike borders)
         c.roundRect(x0, y0, label_w, label_h, 6, stroke=1, fill=0)
 
         name = (prod.name or "")[:26]
-        sku = (prod.sku or "")[:22]
+        sku = (getattr(prod, "sku", "") or "")[:22]
         price = f"${prod.sell_price}" if prod.sell_price is not None else ""
 
         c.setFont("Helvetica-Bold", 9)
@@ -70,13 +65,10 @@ def print_barcodes_pdf(modeladmin, request, queryset):
             c.drawString(x0 + 4 * mm, y0 + label_h - 12 * mm, f"SKU: {sku}")
         c.drawString(x0 + 4 * mm, y0 + label_h - 17 * mm, f"Price: {price}")
 
-        # Barcode (Code128)
         value = (prod.code or "").strip()
         if value:
             bc = code128.Code128(value, barHeight=12 * mm, humanReadable=True)
-            bc_x = x0 + 4 * mm
-            bc_y = y0 + 4 * mm
-            bc.drawOn(c, bc_x, bc_y)
+            bc.drawOn(c, x0 + 4 * mm, y0 + 4 * mm)
         else:
             c.setFont("Helvetica-Oblique", 8)
             c.drawString(x0 + 4 * mm, y0 + 8 * mm, "No barcode (code)")
@@ -90,7 +82,6 @@ def print_barcodes_pdf(modeladmin, request, queryset):
 
         draw_label(prod, x, y)
 
-        # advance grid
         if (i + 1) % cols == 0:
             x = margin_x
             y -= (label_h + gap_y)
@@ -124,13 +115,11 @@ class ProductAdmin(admin.ModelAdmin):
         return f"{obj.weight} {obj.unit.name if obj.unit else ''}"
     weight_display.short_description = "Weight"
 
-    # tombol per-row: cetak 1 barcode langsung
     def barcode_pdf_link(self, obj):
         url = f"/admin/print-barcodes/?ids={obj.id}"
         return format_html('<a class="button" href="{}" target="_blank">🖨️ Barcode</a>', url)
     barcode_pdf_link.short_description = "Barcode PDF"
 
-    # action multi select: cetak banyak barcode
     @admin.action(description="🖨️ Print Barcodes (PDF)")
     def action_print_barcodes_pdf(self, request, queryset):
         ids = ",".join(str(x) for x in queryset.values_list("id", flat=True))
@@ -144,14 +133,14 @@ class ProductAdmin(admin.ModelAdmin):
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
     list_display = (
-        "invoice_number",  
+        "invoice_number",
         "id",
         "customer_name",
         "order_type",
         "total",
         "payment_method",
         "created_at_formatted",
-        "served_by",
+        "served_by_display",
         "is_paid",
         "receipt_link",
     )
@@ -175,12 +164,12 @@ class OrderAdmin(admin.ModelAdmin):
         return obj.created_at.strftime("%I:%M %p, %d %B, %Y")
     created_at_formatted.short_description = "Time"
 
-    def served_by(self, obj):
+    def served_by_display(self, obj):
         if not obj.served_by:
             return "-"
         full_name = getattr(obj.served_by, "full_name", None)
         return full_name or obj.served_by.username
-    served_by.short_description = "Served By"
+    served_by_display.short_description = "Served By"
 
     def receipt_link(self, obj):
         url = reverse("order_receipt_pdf", args=[obj.id])
@@ -189,7 +178,9 @@ class OrderAdmin(admin.ModelAdmin):
 
     def get_queryset(self, request):
         qs = super().get_queryset(request)
-        if request.user.is_superuser or getattr(request.user, "role", "") in ["admin", "manager"]:
+        # Admin site only accessible by superuser anyway,
+        # but keep logic safe if staff changes later
+        if request.user.is_superuser:
             return qs
         return qs.filter(served_by=request.user)
 
@@ -197,6 +188,7 @@ class OrderAdmin(admin.ModelAdmin):
         if not obj.served_by_id:
             obj.served_by = request.user
         super().save_model(request, obj, form, change)
+
 
 @admin.register(Banner)
 class BannerAdmin(admin.ModelAdmin):
@@ -257,13 +249,47 @@ admin.site.register(Expense)
 admin.site.register(Shop)
 
 
+@admin.register(CustomUser)
 class CustomUserAdmin(UserAdmin):
-    model = CustomUser
-    list_display = ["username", "email", "role", "is_active", "is_staff"]
-    fieldsets = UserAdmin.fieldsets + ((None, {"fields": ("role",)}),)
+    """
+    Clean Jazzmin UI:
+    - ONLY dropdown role
+    - No groups / user_permissions
+    - No manual is_staff / is_superuser (auto-synced in model.save)
+    """
 
+    fieldsets = (
+        ("Login Info", {"fields": ("username", "password")}),
+        ("Personal Info", {"fields": ("first_name", "last_name", "email")}),
+        ("Role Settings", {"fields": ("role",)}),
+        ("System Info", {"fields": ("is_active", "last_login", "date_joined")}),
+    )
 
-admin.site.register(CustomUser, CustomUserAdmin)
+    add_fieldsets = (
+        ("Create User", {
+            "classes": ("wide",),
+            "fields": ("username", "email", "password1", "password2", "role", "is_active"),
+        }),
+    )
+
+    list_display = ("username", "email", "role", "is_active")
+    list_filter = ("role", "is_active")
+    search_fields = ("username", "email")
+    ordering = ("username",)
+
+    # Remove permissions UI completely
+    filter_horizontal = ()
+    readonly_fields = ("last_login", "date_joined")
+
+    def get_form(self, request, obj=None, **kwargs):
+        form = super().get_form(request, obj, **kwargs)
+
+        # Prevent accidental self-demotion (optional but safe)
+        if obj and obj.pk == request.user.pk:
+            if "role" in form.base_fields:
+                form.base_fields["role"].disabled = True
+
+        return form
 
 
 @admin.register(TokenProxy)

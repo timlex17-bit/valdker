@@ -9,18 +9,86 @@ from cloudinary.models import CloudinaryField
 
 # ========== CUSTOM USER ==========
 class CustomUser(AbstractUser):
+    ROLE_ADMIN = "admin"
+    ROLE_MANAGER = "manager"
+    ROLE_CASHIER = "cashier"
+
     ROLE_CHOICES = (
-        ('admin', 'Admin'),
-        ('manager', 'Manager'),
-        ('cashier', 'Cashier'),
+        (ROLE_ADMIN, "Admin"),
+        (ROLE_MANAGER, "Manager"),
+        (ROLE_CASHIER, "Cashier"),
     )
-    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='cashier')
+
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default=ROLE_CASHIER, db_index=True)
 
     @property
     def role_label(self):
+        # compatibility for templates/context processors
         if self.is_superuser:
-            return 'admin'
-        return self.role
+            return self.ROLE_ADMIN
+        return self.role or self.ROLE_CASHIER
+
+    def save(self, *args, **kwargs):
+        """
+        HARD POLICY:
+        - ADMIN => is_superuser=True and is_staff=True
+        - MANAGER/CASHIER => is_superuser=False and is_staff=False
+        """
+        r = (self.role or self.ROLE_CASHIER).lower().strip()
+
+        if r == self.ROLE_ADMIN:
+            self.is_superuser = True
+            self.is_staff = True
+        else:
+            self.is_superuser = False
+            self.is_staff = False
+
+        super().save(*args, **kwargs)
+
+    def get_feature_permissions(self):
+        """
+        Central Feature Permission Mapping
+        Android & API will use this.
+        """
+
+        ROLE_PERMISSIONS = {
+            self.Role.ADMIN: [
+                "pos.view_reports",
+                "pos.view_income",
+                "pos.manage_products",
+                "pos.manage_users",
+                "pos.manage_expenses",
+                "pos.create_orders",
+                "pos.refunds",
+                "pos.stock_adjust",
+                "pos.export_data",
+                "pos.manage_settings",
+                "pos.manage_suppliers",
+                "pos.manage_customers",
+            ],
+            self.Role.MANAGER: [
+                "pos.view_reports",
+                "pos.view_income",
+                "pos.manage_products",
+                "pos.manage_expenses",
+                "pos.create_orders",
+                "pos.refunds",
+                "pos.stock_adjust",
+                "pos.export_data",
+                "pos.manage_suppliers",
+                "pos.manage_customers",
+            ],
+            self.Role.CASHIER: [
+                "pos.create_orders",
+                "pos.refunds",
+                "pos.manage_customers",
+            ],
+        }
+
+        return ROLE_PERMISSIONS.get(self.role, [])
+
+    def has_feature(self, feature_code: str) -> bool:
+        return feature_code in self.get_feature_permissions()
 
 
 # ========== CUSTOMER ==========

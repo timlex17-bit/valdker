@@ -6,7 +6,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
-from pos.permissions import IsOwnerOrManager
+from pos.permissions import IsSuperAdminOnly
 from pos.serializers_owner_chat import OwnerChatRequestSerializer
 from pos.api_owner_chat.intents import detect_intent
 from pos.api_owner_chat.utils import parse_date_range
@@ -18,7 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 class OwnerChatAPIView(APIView):
-    permission_classes = [IsOwnerOrManager]
+    # ✅ ADMIN-only (superuser)
+    permission_classes = [IsSuperAdminOnly]
 
     def get(self, request):
         return Response(
@@ -38,7 +39,6 @@ class OwnerChatAPIView(APIView):
         intent_res = detect_intent(message)
         range_label, dr = parse_date_range(message)
 
-        # timezone safe inclusive end (for meta only)
         to_dt_inclusive = timezone.localtime(dr.end) - timedelta(microseconds=1)
 
         meta = {
@@ -77,20 +77,14 @@ class OwnerChatAPIView(APIView):
             return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
         try:
-            # =========================================================
-            # HELP
-            # =========================================================
             if intent_res.intent == "help":
-                topic = intent_res.slot
+                topic = getattr(intent_res, "slot", None)
                 if topic and topic in HELP_TOPICS:
                     reply = f"🧾 {HELP_TOPICS[topic]['title']}\n\n{HELP_TOPICS[topic]['text']}"
                 else:
                     reply = HELP_FALLBACK_TEXT
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # SALES / INCOME (existing)
-            # =========================================================
             if intent_res.intent in ("sales_summary", "orders_kpi"):
                 r = queries.sales_summary(dr)
 
@@ -124,11 +118,8 @@ class OwnerChatAPIView(APIView):
 
                 return Response({"reply_text": reply, "cards": cards, "links": links, "meta": meta}, status=200)
 
-            # =========================================================
-            # SALES ADVANCED: sales_by_type
-            # =========================================================
             if intent_res.intent == "sales_by_type":
-                order_type = intent_res.slot or "GENERAL"
+                order_type = getattr(intent_res, "slot", None) or "GENERAL"
                 r = queries.sales_by_type(dr, order_type=order_type)
 
                 reply = (
@@ -146,9 +137,6 @@ class OwnerChatAPIView(APIView):
 
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # delivery_fee_summary
-            # =========================================================
             if intent_res.intent == "delivery_fee_summary":
                 r = queries.delivery_fee_summary(dr)
                 reply = (
@@ -158,9 +146,6 @@ class OwnerChatAPIView(APIView):
                 cards = [{"label": "Delivery Fee", "value": queries.money(r["delivery_fee"])}]
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # discount_summary
-            # =========================================================
             if intent_res.intent == "discount_summary":
                 r = queries.discount_summary(dr)
                 reply = (
@@ -170,9 +155,6 @@ class OwnerChatAPIView(APIView):
                 cards = [{"label": "Discount", "value": queries.money(r["discount"])}]
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # payment_method_top
-            # =========================================================
             if intent_res.intent == "payment_method_top":
                 items = queries.payment_method_top(dr, limit=5)
 
@@ -185,9 +167,6 @@ class OwnerChatAPIView(APIView):
 
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # cash_vs_transfer
-            # =========================================================
             if intent_res.intent == "cash_vs_transfer":
                 r = queries.cash_vs_transfer(dr)
                 reply = f"💰 Cash vs Non-Cash ({meta['from']} → {meta['to']})"
@@ -199,9 +178,6 @@ class OwnerChatAPIView(APIView):
                 )
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # busiest_hours
-            # =========================================================
             if intent_res.intent == "busiest_hours":
                 items = queries.busiest_hours(dr, limit=5)
                 reply = f"⏰ Jam Paling Ramai ({meta['from']} → {meta['to']})"
@@ -212,12 +188,8 @@ class OwnerChatAPIView(APIView):
                         reply += f"\n{i}. {it['hour']:02d}:00 — {it['orders']} trx — {queries.money(it['total'])}"
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # EXPENSE (existing)
-            # =========================================================
             if intent_res.intent in ("expense_summary", "expense_top"):
                 r = queries.expense_summary(dr)
-
                 reply = (
                     f"💸 Expense ({meta['from']} → {meta['to']})\n"
                     f"Total Expense: {queries.money(r['total'])}"
@@ -233,35 +205,24 @@ class OwnerChatAPIView(APIView):
                     "title": "Buka Expense Report",
                     "url": f"/admin/reports/expense/?from={meta['from']}&to={meta['to']}"
                 }]
-
                 return Response({"reply_text": reply, "cards": cards, "links": links, "meta": meta}, status=200)
 
-            # =========================================================
-            # PROFIT (existing)
-            # =========================================================
             if intent_res.intent == "profit_summary":
                 r = queries.profit_summary(dr)
-
                 reply = (
                     f"🧮 Profit ({meta['from']} → {meta['to']})\n"
                     f"Net Sales: {queries.money(r['net_sales'])}\n"
                     f"Expense: {queries.money(r['expense'])}\n"
                     f"Profit: {queries.money(r['profit'])}"
                 )
-
                 cards = [
                     {"label": "Net Sales", "value": queries.money(r["net_sales"])},
                     {"label": "Expense", "value": queries.money(r["expense"])},
                     {"label": "Profit", "value": queries.money(r["profit"])},
                 ]
-
                 links = [{"title": "Buka Sales Chart", "url": "/admin/reports/sales-chart/"}]
-
                 return Response({"reply_text": reply, "cards": cards, "links": links, "meta": meta}, status=200)
 
-            # =========================================================
-            # margin_summary
-            # =========================================================
             if intent_res.intent == "margin_summary":
                 r = queries.margin_summary(dr)
                 reply = (
@@ -277,25 +238,17 @@ class OwnerChatAPIView(APIView):
                 ]
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # TOP PRODUCTS (existing)
-            # =========================================================
             if intent_res.intent == "top_products":
                 items = queries.top_products(dr)
-
                 reply = f"🏆 Top Products ({meta['from']} → {meta['to']})"
                 if not items:
                     reply += "\nTidak ada data penjualan pada range ini."
                 else:
                     for i, it in enumerate(items, start=1):
                         reply += f"\n{i}. {it['name']} — Qty {it['qty']} — {queries.money(it['revenue'])}"
-
                 links = [{"title": "Buka Sales Report", "url": f"/admin/reports/sales/?from={meta['from']}&to={meta['to']}"}]
                 return Response({"reply_text": reply, "cards": [], "links": links, "meta": meta}, status=200)
 
-            # =========================================================
-            # STOCK ALERTS
-            # =========================================================
             if intent_res.intent == "stock_alert":
                 items = queries.stock_alert()
                 reply = "⚠️ Stok menipis (stock <= threshold)"
@@ -304,12 +257,11 @@ class OwnerChatAPIView(APIView):
                 else:
                     for i, it in enumerate(items[:15], start=1):
                         reply += f"\n{i}. {it['name']} — Stock {it['stock']} (Threshold {it.get('min_stock')})"
-
                 cards = [{"label": "Items Alert", "value": str(len(items))}]
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
             if intent_res.intent == "stock_threshold":
-                th = int(intent_res.number or 5)
+                th = int(getattr(intent_res, "number", None) or 5)
                 items = queries.stock_threshold(threshold=th)
                 reply = f"⚠️ Stok kurang dari / sama dengan {th}"
                 if not items:
@@ -317,7 +269,6 @@ class OwnerChatAPIView(APIView):
                 else:
                     for i, it in enumerate(items[:15], start=1):
                         reply += f"\n{i}. {it['name']} — Stock {it['stock']}"
-
                 cards = [{"label": "Items Alert", "value": str(len(items))}]
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
@@ -329,12 +280,11 @@ class OwnerChatAPIView(APIView):
                 else:
                     for i, it in enumerate(items[:15], start=1):
                         reply += f"\n{i}. {it['name']} — Stock {it['stock']}"
-
                 cards = [{"label": "Stock Out", "value": str(len(items))}]
                 return Response({"reply_text": reply, "cards": cards, "links": [], "meta": meta}, status=200)
 
             if intent_res.intent == "stock_item":
-                name = (intent_res.entity or "").strip()
+                name = (getattr(intent_res, "entity", "") or "").strip()
                 items = queries.stock_item_by_name(name)
                 reply = f"📦 Stok produk: {name}"
                 if not items:
@@ -344,9 +294,6 @@ class OwnerChatAPIView(APIView):
                         reply += f"\n{i}. {it['name']} — Stock {it['stock']}"
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # MOVEMENT ADJUSTMENT
-            # =========================================================
             if intent_res.intent == "movement_adjustment":
                 items = queries.movement_by_type(dr, movement_type="ADJUSTMENT", limit=10)
                 reply = f"🛠️ Adjustment Movement ({meta['from']} → {meta['to']})"
@@ -357,35 +304,24 @@ class OwnerChatAPIView(APIView):
                         reply += f"\n{i}. {it['product']} ({it['delta']}): {it['note']}"
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # INVENTORY MOVEMENT (existing)
-            # =========================================================
             if intent_res.intent == "inventory_movement":
                 r = queries.inventory_movement(dr)
-
                 reply = f"🔁 Inventory Movement ({meta['from']} → {meta['to']})"
                 if r["by_type"]:
                     reply += "\n\nSummary:"
                     for x in r["by_type"]:
                         reply += f"\n• {x['type']}: {x['count']} trx (qty {x['qty']})"
-
                 if r["recent"]:
                     reply += "\n\nRecent:"
                     for x in r["recent"]:
                         reply += f"\n- {x['type']} {x['product']} ({x['delta']}): {x['note']}"
-
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # SMART INSIGHT: compare_period
-            # =========================================================
             if intent_res.intent == "compare_period":
                 cmp = insight.compare_period(dr, queries)
-
                 this_sales = cmp["this"]["sales"]["net_sales"]
                 prev_sales = cmp["prev"]["sales"]["net_sales"]
                 d_sales = cmp["delta"]["sales"]
-
                 this_profit = cmp["this"]["profit"]["profit"]
                 prev_profit = cmp["prev"]["profit"]["profit"]
                 d_profit = cmp["delta"]["profit"]
@@ -397,25 +333,16 @@ class OwnerChatAPIView(APIView):
                     f"Expense Δ: {queries.money(cmp['delta']['expense'])}\n"
                     f"Margin Δ: {cmp['delta']['margin_pct']:.2f}%"
                 )
-
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # SMART INSIGHT: why_profit_down
-            # =========================================================
             if intent_res.intent == "why_profit_down":
                 res = insight.why_profit_down(dr, queries)
-                reply = res["text"]
-                return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
+                return Response({"reply_text": res["text"], "cards": [], "links": [], "meta": meta}, status=200)
 
-            # =========================================================
-            # SMART INSIGHT: promo recommendation
-            # =========================================================
             if intent_res.intent == "promo_recommendation":
                 reply = insight.promo_recommendation(dr, queries)
                 return Response({"reply_text": reply, "cards": [], "links": [], "meta": meta}, status=200)
 
-            # ---------------------------------------------------------
             return Response(
                 {"reply_text": "Intent belum di-handle.", "cards": [], "links": [], "meta": meta},
                 status=200
@@ -424,11 +351,7 @@ class OwnerChatAPIView(APIView):
         except Exception:
             logger.exception("OwnerChat query failed")
             return Response(
-                {
-                    "reply_text": "Terjadi error saat mengambil data report. Cek log server.",
-                    "cards": [],
-                    "links": [],
-                    "meta": meta
-                },
+                {"reply_text": "Terjadi error saat mengambil data report. Cek log server.",
+                 "cards": [], "links": [], "meta": meta},
                 status=200
             )
