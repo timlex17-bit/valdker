@@ -2,6 +2,7 @@ from rest_framework import serializers
 from django.db import transaction
 from django.db.models import F
 from django.contrib.auth import get_user_model
+from pos.models import StockAdjustment
 
 from .models import (
     Customer, Supplier, Product, Category, Unit, Banner,
@@ -325,84 +326,51 @@ class UserLiteSerializer(serializers.ModelSerializer):
 class StockAdjustmentSerializer(serializers.ModelSerializer):
     class Meta:
         model = StockAdjustment
-        fields = "__all__"
+        fields = [
+            "id",
+            "product",
+            "old_stock",
+            "new_stock",
+            "reason",
+            "note",
+            "adjusted_at",
+            "adjusted_by",
+        ]
+        read_only_fields = ["id", "adjusted_at", "adjusted_by"]
 
 
 class InventoryCountItemSerializer(serializers.ModelSerializer):
-    difference = serializers.IntegerField(read_only=True)
-
     class Meta:
         model = InventoryCountItem
         fields = ["id", "product", "system_stock", "counted_stock", "difference"]
+        read_only_fields = ["id", "system_stock", "difference"]
 
 
 class InventoryCountSerializer(serializers.ModelSerializer):
-    items = InventoryCountItemSerializer(many=True)
-    
-    class UserLiteSerializer(serializers.ModelSerializer):
-        display_name = serializers.SerializerMethodField()
-
-        class Meta:
-            model = User
-            fields = ["id", "username", "display_name"]
-
-        def get_display_name(self, obj):
-            return getattr(obj, "full_name", "") or obj.username
-
-    class ProductLiteSerializer(serializers.ModelSerializer):
-        class Meta:
-            model = Product
-            fields = ["id", "name", "code", "sku", "sell_price"]
-
-
-    class CustomerLiteSerializer(serializers.ModelSerializer):
-        class Meta:
-            model = Customer
-            fields = ["id", "name"]
+    items = InventoryCountItemSerializer(many=True, required=False)
 
     class Meta:
         model = InventoryCount
         fields = ["id", "title", "note", "counted_at", "counted_by", "items"]
+        read_only_fields = ["id", "counted_at", "counted_by"]
 
-    @transaction.atomic
     def create(self, validated_data):
-        items = validated_data.pop("items", [])
-        count = InventoryCount.objects.create(**validated_data)
+        items_data = validated_data.pop("items", [])
+        obj = InventoryCount.objects.create(**validated_data)
 
-        for it in items:
+        for it in items_data:
             product = it["product"]
-            product.refresh_from_db()
-
-            system_stock = int(it.get("system_stock", product.stock))
-            counted_stock = int(it.get("counted_stock", product.stock))
+            counted_stock = it["counted_stock"]
+            system_stock = getattr(product, "stock", 0)  
             diff = counted_stock - system_stock
-
             InventoryCountItem.objects.create(
-                count=count,
+                inventory_count=obj,
                 product=product,
                 system_stock=system_stock,
-                counted_stock=counted_stock
+                counted_stock=counted_stock,
+                difference=diff
             )
-
-            if diff != 0:
-                before = product.stock
-                after = counted_stock
-                Product.objects.filter(id=product.id).update(stock=counted_stock)
-
-                StockMovement.objects.create(
-                    product=product,
-                    movement_type=StockMovement.Type.COUNT,
-                    quantity_delta=diff,
-                    before_stock=before,
-                    after_stock=after,
-                    note=f"InventoryCount #{count.id}",
-                    ref_model="InventoryCount",
-                    ref_id=count.id,
-                    created_by=validated_data.get("counted_by"),
-                )
-
-        return count
-
+        return obj
 
 class ProductReturnItemSerializer(serializers.ModelSerializer):
     # READ: tampilkan object product (nama, sku, dll)

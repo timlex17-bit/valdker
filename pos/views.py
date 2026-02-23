@@ -22,6 +22,10 @@ from django.template.loader import get_template
 from django.utils import timezone
 from django.utils.dateparse import parse_date
 
+from rest_framework.permissions import IsAuthenticated
+from rest_framework.authentication import TokenAuthentication
+from pos.models import StockAdjustment
+
 from rest_framework import viewsets
 from rest_framework.authentication import TokenAuthentication, SessionAuthentication
 from rest_framework.authtoken.models import Token
@@ -805,12 +809,16 @@ class UnitViewSet(viewsets.ModelViewSet):
 # Inventory APIs
 # =========================
 class StockAdjustmentViewSet(viewsets.ModelViewSet):
-    queryset = StockAdjustment.objects.select_related("product", "adjusted_by").order_by("-adjusted_at", "-id")
+    queryset = StockAdjustment.objects.all().order_by("-adjusted_at")
     serializer_class = StockAdjustmentSerializer
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def perform_create(self, serializer):
-        adj = serializer.save(adjusted_by=self.request.user)
+        serializer.save(adjusted_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save(adjusted_by=self.request.user)
 
         p = adj.product
         p.refresh_from_db()
@@ -834,13 +842,13 @@ class StockAdjustmentViewSet(viewsets.ModelViewSet):
 
 
 class InventoryCountViewSet(viewsets.ModelViewSet):
-    queryset = InventoryCount.objects.prefetch_related("items").order_by("-counted_at", "-id")
+    queryset = InventoryCount.objects.all().order_by("-counted_at")
     serializer_class = InventoryCountSerializer
+    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
     def perform_create(self, serializer):
         serializer.save(counted_by=self.request.user)
-
 
 class ProductReturnViewSet(viewsets.ModelViewSet):
     queryset = ProductReturn.objects.prefetch_related("items").order_by("-returned_at", "-id")
