@@ -1,4 +1,3 @@
-# pos/views.py
 import io
 import os
 import json
@@ -11,11 +10,9 @@ from django.contrib.admin.views.decorators import staff_member_required
 from pos.permissions import IsSuperAdminOnly, AdminOnlyWriteOrRead
 from django.http import HttpResponse
 from django.contrib.auth import authenticate
-from pos.permissions import IsSuperAdminOnly
 from django.db import models
 from django.db.models import Sum, Value, DecimalField, F, ExpressionWrapper
 from django.db.models.functions import Coalesce, TruncDate, TruncMonth
-from django.http import HttpResponse
 from django.shortcuts import render, redirect, get_object_or_404
 from django.template import TemplateDoesNotExist
 from django.template.loader import get_template
@@ -56,11 +53,6 @@ from .serializers import (
     ExpenseSerializer, BannerSerializer,
     StockAdjustmentSerializer, InventoryCountSerializer, ProductReturnSerializer, StockMovementSerializer
 )
-
-# =========================
-# Profit APIs (ADMIN only)
-# =========================
-from decimal import Decimal
 
 class DailyProfitReportAPIView(APIView):
     permission_classes = [IsSuperAdminOnly]
@@ -107,69 +99,6 @@ class DailyProfitReportAPIView(APIView):
 
             rows.append({
                 "date": d.isoformat(),
-                "sales": float(s),
-                "expense": float(e),
-                "profit": float(p),
-            })
-
-        return Response({
-            "range": {"start": start.isoformat(), "end": end.isoformat()},
-            "summary": {
-                "sales": float(total_sales),
-                "expense": float(total_exp),
-                "profit": float(total_sales - total_exp),
-            },
-            "rows": rows
-        })
-
-
-class MonthlyPLReportAPIView(APIView):
-    permission_classes = [IsSuperAdminOnly]
-
-    def get(self, request):
-        start = parse_date(request.GET.get("start") or "")
-        end = parse_date(request.GET.get("end") or "")
-
-        today = date.today()
-        if not start:
-            start = date(today.year, 1, 1)
-        if not end:
-            end = date(today.year, 12, 31)
-
-        sales_qs = (
-            Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
-            .annotate(m=TruncMonth("created_at"))
-            .values("m")
-            .annotate(total=Coalesce(Sum("total"), Value(0), output_field=DecimalField(max_digits=18, decimal_places=2)))
-            .order_by("m")
-        )
-
-        exp_qs = (
-            Expense.objects.filter(date__gte=start, date__lte=end)
-            .annotate(m=TruncMonth("date"))
-            .values("m")
-            .annotate(total=Coalesce(Sum("amount"), Value(0), output_field=DecimalField(max_digits=18, decimal_places=2)))
-            .order_by("m")
-        )
-
-        sales_map = {row["m"]: row["total"] for row in sales_qs}
-        exp_map = {row["m"]: row["total"] for row in exp_qs}
-        all_months = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
-
-        rows = []
-        total_sales = Decimal("0")
-        total_exp = Decimal("0")
-
-        for m in all_months:
-            s = sales_map.get(m, Decimal("0"))
-            e = exp_map.get(m, Decimal("0"))
-            p = s - e
-
-            total_sales += s
-            total_exp += e
-
-            rows.append({
-                "month": m.strftime("%Y-%m"),
                 "sales": float(s),
                 "expense": float(e),
                 "profit": float(p),
@@ -634,68 +563,6 @@ class MonthlyPLReportAPIView(APIView):
             "rows": rows
         })
 
-
-class MonthlyPLReportAPIView(APIView):
-    permission_classes = [IsAuthenticated]
-
-    def get(self, request):
-        start = parse_date(request.GET.get("start") or "")
-        end = parse_date(request.GET.get("end") or "")
-
-        today = date.today()
-        if not start:
-            start = date(today.year, 1, 1)
-        if not end:
-            end = date(today.year, 12, 31)
-
-        sales_qs = (
-            Order.objects.filter(is_paid=True, created_at__date__gte=start, created_at__date__lte=end)
-            .annotate(m=TruncMonth("created_at"))
-            .values("m")
-            .annotate(total=Sum("total"))
-            .order_by("m")
-        )
-
-        exp_qs = (
-            Expense.objects.filter(date__gte=start, date__lte=end)
-            .annotate(m=TruncMonth("date"))
-            .values("m")
-            .annotate(total=Sum("amount"))
-            .order_by("m")
-        )
-
-        sales_map = {row["m"]: float(row["total"] or 0) for row in sales_qs}
-        exp_map = {row["m"]: float(row["total"] or 0) for row in exp_qs}
-        all_months = sorted(set(list(sales_map.keys()) + list(exp_map.keys())))
-
-        rows = []
-        total_sales = 0.0
-        total_exp = 0.0
-
-        for m in all_months:
-            s = float(sales_map.get(m, 0))
-            e = float(exp_map.get(m, 0))
-            p = s - e
-            total_sales += s
-            total_exp += e
-            rows.append({
-                "month": m.strftime("%Y-%m"),
-                "sales": round(s, 2),
-                "expense": round(e, 2),
-                "profit": round(p, 2),
-            })
-
-        return Response({
-            "range": {"start": start.strftime("%Y-%m-%d"), "end": end.strftime("%Y-%m-%d")},
-            "summary": {
-                "sales": round(total_sales, 2),
-                "expense": round(total_exp, 2),
-                "profit": round(total_sales - total_exp, 2),
-            },
-            "rows": rows
-        })
-
-
 @api_view(["GET"])
 @authentication_classes([TokenAuthentication])
 @permission_classes([IsSuperAdminOnly])
@@ -744,12 +611,6 @@ class CategoryViewSet(viewsets.ModelViewSet):
 
     def get_serializer_context(self):
         return {"request": self.request}
-
-
-class UnitViewSet(viewsets.ModelViewSet):
-    queryset = Unit.objects.all().order_by("name")
-    serializer_class = UnitSerializer
-
 
 class ProductViewSet(viewsets.ModelViewSet):
     queryset = Product.objects.all().order_by("-id")
@@ -818,10 +679,11 @@ class StockAdjustmentViewSet(viewsets.ModelViewSet):
         serializer.save(adjusted_by=self.request.user)
 
     def perform_update(self, serializer):
-        serializer.save(adjusted_by=self.request.user)
+        adj = serializer.save(adjusted_by=self.request.user)
 
         p = adj.product
         p.refresh_from_db()
+
         before = p.stock
         after = adj.new_stock
         delta = after - before
@@ -839,7 +701,6 @@ class StockAdjustmentViewSet(viewsets.ModelViewSet):
             ref_id=adj.id,
             created_by=self.request.user,
         )
-
 
 class InventoryCountViewSet(viewsets.ModelViewSet):
     queryset = InventoryCount.objects.all().order_by("-counted_at")
