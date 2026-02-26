@@ -360,28 +360,34 @@ class StockAdjustment(models.Model):
 # INVENTORY COUNTS (Stock Opname)
 # ==========================================================
 class InventoryCount(models.Model):
-    title = models.CharField(max_length=120, default="Stock Count")
-    note = models.CharField(max_length=255, blank=True, default="")
-    counted_at = models.DateTimeField(default=timezone.now, db_index=True)
-    counted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    STATUS_DRAFT = "DRAFT"
+    STATUS_DONE = "DONE"
 
-    class Meta:
-        ordering = ("-counted_at", "-id")
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_DONE, "Finalized"),
+    ]
 
-    def __str__(self):
-        return f"Count #{self.id} - {self.title}"
+    title = models.CharField(max_length=200)
+    note = models.TextField(blank=True, null=True)
+    counted_at = models.DateTimeField(default=timezone.now)
+    counted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
+
+    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+
+    created_at = models.DateTimeField(auto_now_add=True)
 
 
 class InventoryCountItem(models.Model):
-    count = models.ForeignKey(InventoryCount, on_delete=models.CASCADE, related_name="items")
+    inventory = models.ForeignKey(InventoryCount, related_name="items", on_delete=models.CASCADE)
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
+
     system_stock = models.IntegerField()
     counted_stock = models.IntegerField()
 
     @property
     def difference(self):
         return self.counted_stock - self.system_stock
-
 
 # ==========================================================
 # PRODUCT RETURN (Sale Return)

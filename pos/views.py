@@ -28,6 +28,7 @@ from rest_framework.authentication import TokenAuthentication, SessionAuthentica
 from rest_framework.authtoken.models import Token
 from rest_framework.decorators import api_view, permission_classes, authentication_classes
 from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
@@ -666,13 +667,44 @@ class UnitViewSet(viewsets.ModelViewSet):
         return {"request": self.request}
 
 class InventoryCountViewSet(viewsets.ModelViewSet):
-    queryset = InventoryCount.objects.all().order_by("-counted_at")
+    queryset = InventoryCount.objects.all()
     serializer_class = InventoryCountSerializer
-    authentication_classes = [TokenAuthentication]
     permission_classes = [IsAuthenticated]
 
-    def perform_create(self, serializer):
-        serializer.save(counted_by=self.request.user)
+    @action(detail=True, methods=["post"])
+    def finalize(self, request, pk=None):
+        inventory = self.get_object()
+
+        # 🚫 Anti double finalize
+        if inventory.status == InventoryCount.STATUS_DONE:
+            return Response({"error": "Inventory already finalized"}, status=400)
+
+        with transaction.atomic():
+
+            items = inventory.items.select_related("product")
+
+            for item in items:
+                product = item.product
+                difference = item.counted_stock - item.system_stock
+
+                if difference != 0:
+                    # ✅ Update stock
+                    product.stock = item.counted_stock
+                    product.save()
+
+                    # ✅ Create movement log
+                    StockMovement.objects.create(
+                        product=product,
+                        movement_type="COUNT",
+                        quantity=abs(difference),
+                        note=f"Inventory Count #{inventory.id}",
+                        created_by=request.user,
+                    )
+
+            inventory.status = InventoryCount.STATUS_DONE
+            inventory.save()
+
+        return Response({"status": "Finalized successfully"})
 
 class ProductReturnViewSet(viewsets.ModelViewSet):
     queryset = ProductReturn.objects.prefetch_related("items").order_by("-returned_at", "-id")
