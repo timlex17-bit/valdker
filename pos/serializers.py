@@ -109,8 +109,8 @@ class ProductSerializer(serializers.ModelSerializer):
         model = Product
         fields = [
             "id", "name",
-            "sku",           
-            "code",          
+            "sku",
+            "code",
             "description", "stock",
             "buy_price", "sell_price", "weight",
             "image", "image_url",
@@ -118,6 +118,15 @@ class ProductSerializer(serializers.ModelSerializer):
             "supplier", "supplier_id",
             "unit", "unit_id",
         ]
+
+    def update(self, instance, validated_data):
+        # 🔒 Block stock manual edit
+        if "stock" in validated_data:
+            raise serializers.ValidationError({
+                "stock": "Stock cannot be edited directly. Use Stock Adjustment."
+            })
+
+        return super().update(instance, validated_data)
 
 
 class OrderItemSerializer(serializers.ModelSerializer):

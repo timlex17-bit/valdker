@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+from django.db import transaction
 from django.db.models import F
 from .models_shift import Shift, ShiftStatus
 from rest_framework.authtoken.models import Token
@@ -302,8 +303,7 @@ class StockMovement(models.Model):
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         on_delete=models.SET_NULL,
-        null=True,
-        blank=True
+        null=True
     )
 
     class Meta:
@@ -317,25 +317,43 @@ class StockMovement(models.Model):
 # STOCK ADJUSTMENTS
 # ==========================================================
 class StockAdjustment(models.Model):
-    class Reason(models.TextChoices):
-        DAMAGE = "DAMAGE", "Damage"
-        LOST = "LOST", "Lost"
-        FOUND = "FOUND", "Found"
-        CORRECTION = "CORRECTION", "Correction"
-
     product = models.ForeignKey(Product, on_delete=models.CASCADE)
     old_stock = models.IntegerField()
     new_stock = models.IntegerField()
-    reason = models.CharField(max_length=20, choices=Reason.choices, default=Reason.CORRECTION)
-    note = models.CharField(max_length=255, blank=True, default="")
-    adjusted_at = models.DateTimeField(default=timezone.now, db_index=True)
-    adjusted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    reason = models.CharField(max_length=100)
+    note = models.TextField(blank=True, null=True)
+    adjusted_at = models.DateTimeField(auto_now_add=True)
+    adjusted_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True
+    )
 
-    class Meta:
-        ordering = ("-adjusted_at", "-id")
+    @transaction.atomic
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            self.old_stock = self.product.stock
 
-    def __str__(self):
-        return f"Adj {self.product.name} {self.old_stock}->{self.new_stock}"
+            before = self.product.stock
+            after = self.new_stock
+            delta = after - before
+
+            # update product stock
+            self.product.stock = after
+            self.product.save()
+
+            # create movement log
+            StockMovement.objects.create(
+                product=self.product,
+                movement_type=StockMovement.Type.ADJUSTMENT,
+                quantity_delta=delta,
+                before_stock=before,
+                after_stock=after,
+                note=self.reason,
+                created_by=self.adjusted_by
+            )
+
+        super().save(*args, **kwargs)
 
 
 # ==========================================================

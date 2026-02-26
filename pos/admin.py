@@ -112,13 +112,21 @@ class ProductAdmin(admin.ModelAdmin):
 
     actions = ["action_print_barcodes_pdf"]
 
+    # 🔒 LOCK STOCK SAAT EDIT
+    def get_readonly_fields(self, request, obj=None):
+        if obj:  # kalau edit existing product
+            return ("stock",)
+        return ()
+
     def weight_display(self, obj):
         return f"{obj.weight} {obj.unit.name if obj.unit else ''}"
     weight_display.short_description = "Weight"
 
     def barcode_pdf_link(self, obj):
         url = f"/admin/print-barcodes/?ids={obj.id}"
-        return format_html('<a class="button" href="{}" target="_blank">🖨️ Barcode</a>', url)
+        return format_html(
+            '<a class="button" href="{}" target="_blank">🖨️ Barcode</a>', url
+        )
     barcode_pdf_link.short_description = "Barcode PDF"
 
     @admin.action(description="🖨️ Print Barcodes (PDF)")
@@ -126,6 +134,7 @@ class ProductAdmin(admin.ModelAdmin):
         ids = ",".join(str(x) for x in queryset.values_list("id", flat=True))
         url = f"/admin/print-barcodes/?ids={ids}"
         return HttpResponseRedirect(url)
+
 
 
 # ==========================================================

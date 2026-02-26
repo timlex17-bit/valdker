@@ -36,7 +36,7 @@ from rest_framework.permissions import IsAuthenticated
 from decimal import Decimal
 
 from xhtml2pdf import pisa
-
+from django.db import transaction
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
@@ -665,43 +665,6 @@ class UnitViewSet(viewsets.ModelViewSet):
     def get_serializer_context(self):
         return {"request": self.request}
 
-
-# =========================
-# Inventory APIs
-# =========================
-class StockAdjustmentViewSet(viewsets.ModelViewSet):
-    queryset = StockAdjustment.objects.all().order_by("-adjusted_at")
-    serializer_class = StockAdjustmentSerializer
-    authentication_classes = [TokenAuthentication]
-    permission_classes = [IsAuthenticated]
-
-    def perform_create(self, serializer):
-        serializer.save(adjusted_by=self.request.user)
-
-    def perform_update(self, serializer):
-        adj = serializer.save(adjusted_by=self.request.user)
-
-        p = adj.product
-        p.refresh_from_db()
-
-        before = p.stock
-        after = adj.new_stock
-        delta = after - before
-
-        Product.objects.filter(id=p.id).update(stock=after)
-
-        StockMovement.objects.create(
-            product=p,
-            movement_type=StockMovement.Type.ADJUSTMENT,
-            quantity_delta=delta,
-            before_stock=before,
-            after_stock=after,
-            note=f"{adj.reason}: {adj.note}".strip(),
-            ref_model="StockAdjustment",
-            ref_id=adj.id,
-            created_by=self.request.user,
-        )
-
 class InventoryCountViewSet(viewsets.ModelViewSet):
     queryset = InventoryCount.objects.all().order_by("-counted_at")
     serializer_class = InventoryCountSerializer
@@ -718,26 +681,62 @@ class ProductReturnViewSet(viewsets.ModelViewSet):
 
     def perform_create(self, serializer):
         serializer.save(returned_by=self.request.user)
-
+        
 
 class StockMovementViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = StockMovement.objects.select_related("product", "created_by").order_by("-created_at", "-id")
+    queryset = StockMovement.objects.select_related(
+        "product", "created_by"
+    ).order_by("-created_at", "-id")
+
     serializer_class = StockMovementSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         qs = super().get_queryset()
+
         product_id = self.request.query_params.get("product")
         mtype = self.request.query_params.get("type")
+
         if product_id:
             try:
                 qs = qs.filter(product_id=int(product_id))
-            except Exception:
+            except:
                 pass
+
         if mtype:
             qs = qs.filter(movement_type=mtype)
+
         return qs
 
+class StockAdjustmentViewSet(viewsets.ModelViewSet):
+    queryset = StockAdjustment.objects.all()
+    serializer_class = StockAdjustmentSerializer
+    permission_classes = [IsAuthenticated]
+
+    @transaction.atomic
+    def perform_create(self, serializer):
+        adj = serializer.save(adjusted_by=self.request.user)
+
+        product = adj.product
+        before = product.stock
+        after = adj.new_stock
+        delta = after - before
+
+        # Update stock
+        Product.objects.filter(pk=product.pk).update(stock=after)
+
+        # Create movement log
+        StockMovement.objects.create(
+            product=product,
+            movement_type=StockMovement.Type.ADJUSTMENT,
+            quantity_delta=delta,
+            before_stock=before,
+            after_stock=after,
+            note=adj.reason,
+            ref_model="StockAdjustment",
+            ref_id=adj.id,
+            created_by=self.request.user,
+        )
 
 # =========================
 # Receipt PDF (xhtml2pdf)
