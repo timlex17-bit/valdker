@@ -413,9 +413,9 @@ class ProductReturnItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
 
-class TokenProxy(Token):
-    class Meta:
-        proxy = True
-        app_label = "pos"
-        verbose_name = "Token"
-        verbose_name_plural = "Tokens"
+# class TokenProxy(Token):
+#     class Meta:
+#         proxy = True
+#         app_label = "pos"
+#         verbose_name = "Token"
+#         verbose_name_plural = "Tokens"

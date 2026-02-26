@@ -11,7 +11,7 @@ from pos.models_shift import Shift
 from reportlab.graphics.barcode import code128
 
 from .models import (
-    Banner, TokenProxy, CustomUser,
+    Banner, CustomUser,
     Customer, Supplier, Category, Unit,
     Product, Order, OrderItem, Expense, Shop,
     StockAdjustment, InventoryCount, InventoryCountItem,
@@ -307,8 +307,8 @@ class ShiftAdmin(admin.ModelAdmin):
     list_filter = ("status", "shop", "opened_at")
     search_fields = ("cashier__username", "cashier__email")
 
-@admin.register(TokenProxy)
-class TokenProxyAdmin(admin.ModelAdmin):
-    list_display = ("key", "user", "created")
-    search_fields = ("key", "user__username", "user__email")
-    ordering = ("-created",)
+# @admin.register(TokenProxy)
+# class TokenProxyAdmin(admin.ModelAdmin):
+#     list_display = ("key", "user", "created")
+#     search_fields = ("key", "user__username", "user__email")
+#     ordering = ("-created",)
