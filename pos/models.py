@@ -48,13 +48,8 @@ class CustomUser(AbstractUser):
         super().save(*args, **kwargs)
 
     def get_feature_permissions(self):
-        """
-        Central Feature Permission Mapping
-        Android & API will use this.
-        """
-
         ROLE_PERMISSIONS = {
-            self.Role.ADMIN: [
+            self.ROLE_ADMIN: [
                 "pos.view_reports",
                 "pos.view_income",
                 "pos.manage_products",
@@ -68,7 +63,7 @@ class CustomUser(AbstractUser):
                 "pos.manage_suppliers",
                 "pos.manage_customers",
             ],
-            self.Role.MANAGER: [
+            self.ROLE_MANAGER: [
                 "pos.view_reports",
                 "pos.view_income",
                 "pos.manage_products",
@@ -80,7 +75,7 @@ class CustomUser(AbstractUser):
                 "pos.manage_suppliers",
                 "pos.manage_customers",
             ],
-            self.Role.CASHIER: [
+            self.ROLE_CASHIER: [
                 "pos.create_orders",
                 "pos.refunds",
                 "pos.manage_customers",

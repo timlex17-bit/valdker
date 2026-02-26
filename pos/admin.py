@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.http import HttpResponseRedirect, HttpResponse
+from rest_framework.authtoken.models import Token
 from django.urls import reverse
 from django.utils.html import format_html
 
@@ -18,6 +19,8 @@ from .models import (
     ProductReturn, ProductReturnItem, StockMovement
 )
 
+
+admin.site.register(Token)
 
 # ==========================================================
 # PDF Barcode Printing (Admin)

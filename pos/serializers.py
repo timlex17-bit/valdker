@@ -222,9 +222,13 @@ class OrderSerializer(serializers.ModelSerializer):
 
         order = Order.objects.create(**validated_data)
 
+        subtotal = 0
+
         for item_data in items_data:
             product = item_data["product"]
             quantity = int(item_data["quantity"])
+            price = item_data["price"]
+
             product.refresh_from_db()
 
             if product.stock < quantity:
@@ -232,16 +236,16 @@ class OrderSerializer(serializers.ModelSerializer):
                     "stock": f"Insufficient stock for {product.name}. Remaining {product.stock}, requested {quantity}"
                 })
 
-            if "order_type" not in item_data:
-                item_data["order_type"] = OrderItem.OrderType.TAKE_OUT
+            # HITUNG SUBTOTAL
+            subtotal += quantity * price
 
             before = product.stock
             after = before - quantity
 
             Product.objects.filter(id=product.id).update(stock=F("stock") - quantity)
+
             OrderItem.objects.create(order=order, **item_data)
 
-            # ✅ inventory history
             StockMovement.objects.create(
                 product=product,
                 movement_type=StockMovement.Type.SALE,
@@ -253,6 +257,11 @@ class OrderSerializer(serializers.ModelSerializer):
                 ref_id=order.id,
                 created_by=validated_data.get("served_by"),
             )
+
+        # UPDATE ORDER TOTAL
+        order.subtotal = subtotal
+        order.total = subtotal + order.delivery_fee - order.discount + order.tax
+        order.save(update_fields=["subtotal", "total"])
 
         return order
 
