@@ -2,6 +2,7 @@ from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.http import HttpResponseRedirect, HttpResponse
 from .models import Purchase, PurchaseItem
+from .models import TokenProxy
 from rest_framework.authtoken.models import Token
 from django.urls import reverse
 from django.utils.html import format_html
@@ -20,8 +21,20 @@ from .models import (
     ProductReturn, ProductReturnItem, StockMovement
 )
 
+@admin.register(TokenProxy)
+class TokenProxyAdmin(admin.ModelAdmin):
+    list_display = ("key", "user", "created")
+    search_fields = ("key", "user__username", "user__email")
+    ordering = ("-created",)
 
-admin.site.register(Token)
+    def has_module_permission(self, request):
+        return request.user.is_superuser
+
+    def has_view_permission(self, request, obj=None):
+        return request.user.is_superuser
+
+
+# admin.site.register(Token)
 
 class PurchaseItemInline(admin.TabularInline):
     model = PurchaseItem

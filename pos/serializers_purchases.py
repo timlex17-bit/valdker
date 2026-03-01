@@ -1,4 +1,5 @@
 from django.db import transaction
+from django.utils import timezone
 from django.utils.dateparse import parse_date
 
 from rest_framework import serializers
@@ -7,7 +8,7 @@ from .models import Purchase, PurchaseItem, Supplier, Product, StockMovement
 
 
 # ==========================================================
-# Item (shared)
+# READ serializers
 # ==========================================================
 class PurchaseItemSerializer(serializers.ModelSerializer):
     product_id = serializers.IntegerField(source="product.id", read_only=True)
@@ -27,9 +28,6 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
         ]
 
 
-# ==========================================================
-# LIST serializer (ringan)
-# ==========================================================
 class PurchaseListSerializer(serializers.ModelSerializer):
     supplier_id = serializers.IntegerField(source="supplier.id", read_only=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
@@ -48,9 +46,6 @@ class PurchaseListSerializer(serializers.ModelSerializer):
         ]
 
 
-# ==========================================================
-# DETAIL serializer (untuk /purchases/<id>/)
-# ==========================================================
 class PurchaseDetailSerializer(serializers.ModelSerializer):
     supplier_id = serializers.IntegerField(source="supplier.id", read_only=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True)
@@ -72,16 +67,12 @@ class PurchaseDetailSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "created_at", "created_by", "items"]
 
 
-# ==========================================================
-# DRF ViewSet serializer alias (biar views.py bisa pakai nama "PurchaseSerializer")
-# ==========================================================
-# Kalau kamu mau pakai PurchaseSerializer di ViewSet, kita alias ke detail
 class PurchaseSerializer(PurchaseDetailSerializer):
     pass
 
 
 # ==========================================================
-# CREATE serializers
+# CREATE serializers (INPUT)
 # ==========================================================
 class PurchaseCreateItemInputSerializer(serializers.Serializer):
     product = serializers.IntegerField()
@@ -104,7 +95,7 @@ class PurchaseCreateItemInputSerializer(serializers.Serializer):
 class PurchaseCreateSerializer(serializers.Serializer):
     supplier = serializers.IntegerField(required=False, allow_null=True)
     invoice_id = serializers.CharField(required=False, allow_blank=True, default="")
-    purchase_date = serializers.CharField(required=False, allow_blank=True)
+    purchase_date = serializers.DateField(required=False, allow_null=True)  # ✅ lebih aman
     note = serializers.CharField(required=False, allow_blank=True, default="")
 
     items = PurchaseCreateItemInputSerializer(many=True)
@@ -116,17 +107,6 @@ class PurchaseCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError("Supplier not found")
         return v
 
-    def validate_purchase_date(self, v):
-        if v is None:
-            return None
-        v = str(v).strip()
-        if not v:
-            return None
-        d = parse_date(v)
-        if not d:
-            raise serializers.ValidationError("purchase_date must be YYYY-MM-DD")
-        return d
-
     @transaction.atomic
     def create(self, validated_data):
         request = self.context.get("request")
@@ -136,44 +116,45 @@ class PurchaseCreateSerializer(serializers.Serializer):
         invoice_id = (validated_data.get("invoice_id") or "").strip()
         note = (validated_data.get("note") or "").strip()
 
-        purchase_date = validated_data.get("purchase_date", None)
+        purchase_date = validated_data.get("purchase_date")  # date or None
+        pd = purchase_date or timezone.localdate()
+
+        items_in = validated_data.get("items") or []
+        if not items_in:
+            raise serializers.ValidationError({"items": "At least 1 item is required"})
 
         purchase = Purchase.objects.create(
             supplier_id=supplier_id,
             invoice_id=invoice_id,
             note=note,
             created_by=user if user and user.is_authenticated else None,
-            purchase_date=purchase_date if purchase_date else None,
+            purchase_date=pd,
         )
-
-        items_in = validated_data.get("items") or []
-        if not items_in:
-            raise serializers.ValidationError({"items": "At least 1 item is required"})
 
         # Merge same product + expired + cost
         merged = {}
         for it in items_in:
             pid = int(it["product"])
-            exp = it.get("expired_date", None)   # date or None
+            exp = it.get("expired_date", None)  # date or None
             cost = it["cost_price"]
             qty = int(it["quantity"])
 
-            # validate product exist
             if not Product.objects.filter(pk=pid).exists():
                 raise serializers.ValidationError({"items": f"Product {pid} not found"})
 
             key = (pid, exp, str(cost))
-            if key not in merged:
-                merged[key] = {"product_id": pid, "expired_date": exp, "cost_price": cost, "quantity": qty}
-            else:
-                merged[key]["quantity"] += qty
+            merged.setdefault(
+                key,
+                {"product_id": pid, "expired_date": exp, "cost_price": cost, "quantity": 0},
+            )
+            merged[key]["quantity"] += qty
 
         # Create items + update stock + movement
         for _, row in merged.items():
             product = Product.objects.select_for_update().get(pk=row["product_id"])
 
             before = int(product.stock or 0)
-            delta = int(row["quantity"])
+            delta = int(row["quantity"])  # IN
             after = before + delta
 
             PurchaseItem.objects.create(

@@ -210,12 +210,13 @@ class Order(models.Model):
         DELIVERY = "DELIVERY", "Delivery"
 
     invoice_number = models.CharField(
-        max_length=32,
-        unique=True,
-        db_index=True,
-        editable=False,
-        help_text="Auto generated invoice number. Example: INV000000000123"
-    )
+            max_length=32,
+            unique=True,
+            db_index=True,
+            editable=False,
+            blank=True,
+            default=""
+        )
 
     customer = models.ForeignKey(Customer, on_delete=models.SET_NULL, null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
@@ -455,9 +456,9 @@ class ProductReturnItem(models.Model):
     unit_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
 
 
-# class TokenProxy(Token):
-#     class Meta:
-#         proxy = True
-#         app_label = "pos"
-#         verbose_name = "Token"
-#         verbose_name_plural = "Tokens"
+class TokenProxy(Token):
+    class Meta:
+        proxy = True
+        app_label = "pos"
+        verbose_name = "Token"
+        verbose_name_plural = "Tokens"
