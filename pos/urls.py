@@ -1,4 +1,5 @@
 from django.urls import path, include
+from .views_purchases import purchases_list_create, purchases_detail
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -36,6 +37,9 @@ urlpatterns = [
     path("reports/daily-profit/", DailyProfitReportAPIView.as_view(), name="api_daily_profit"),
     path("reports/monthly-pl/", MonthlyPLReportAPIView.as_view(), name="api_monthly_pl"),
     path("reports/net-income-today/", views.net_income_today, name="net_income_today"),
+    
+    path("purchases/", purchases_list_create, name="purchases_list_create"),
+    path("purchases/<int:pk>/", purchases_detail, name="purchases_detail"),
 
     path("products/print-barcodes/", views.api_print_barcodes, name="api_print_barcodes"),
 

@@ -1,6 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 from django.http import HttpResponseRedirect, HttpResponse
+from .models import Purchase, PurchaseItem
 from rest_framework.authtoken.models import Token
 from django.urls import reverse
 from django.utils.html import format_html
@@ -21,6 +22,17 @@ from .models import (
 
 
 admin.site.register(Token)
+
+class PurchaseItemInline(admin.TabularInline):
+    model = PurchaseItem
+    extra = 0
+
+@admin.register(Purchase)
+class PurchaseAdmin(admin.ModelAdmin):
+    list_display = ("id", "invoice_id", "supplier", "purchase_date", "created_at", "created_by")
+    list_filter = ("purchase_date", "supplier")
+    search_fields = ("invoice_id", "supplier__name")
+    inlines = [PurchaseItemInline]
 
 # ==========================================================
 # PDF Barcode Printing (Admin)

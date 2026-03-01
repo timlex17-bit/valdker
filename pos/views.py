@@ -9,7 +9,9 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.admin.views.decorators import staff_member_required
 from pos.permissions import IsSuperAdminOnly, AdminOnlyWriteOrRead
 from django.http import HttpResponse
+from rest_framework import status
 from django.contrib.auth import authenticate
+from rest_framework import status
 from django.db import models
 from django.db.models import Sum, Value, DecimalField, F, ExpressionWrapper
 from django.db.models.functions import Coalesce, TruncDate, TruncMonth
@@ -21,6 +23,8 @@ from django.utils.dateparse import parse_date
 
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.authentication import TokenAuthentication
+from .models import Purchase
+from .serializers_purchases import PurchaseSerializer, PurchaseCreateSerializer
 from pos.models import StockAdjustment
 
 from rest_framework import viewsets
@@ -645,6 +649,27 @@ class ProductViewSet(viewsets.ModelViewSet):
 class OrderViewSet(viewsets.ModelViewSet):
     queryset = Order.objects.all().order_by("-created_at")
     serializer_class = OrderSerializer
+    
+
+class PurchaseViewSet(viewsets.ModelViewSet):
+    queryset = Purchase.objects.all().select_related(
+        "supplier", "created_by"
+    ).prefetch_related(
+        "items", "items__product"
+    )
+    permission_classes = [IsAuthenticated]
+
+    def get_serializer_class(self):
+        if self.action == "create":
+            return PurchaseCreateSerializer
+        return PurchaseSerializer
+
+    def create(self, request, *args, **kwargs):
+        ser = PurchaseCreateSerializer(data=request.data, context={"request": request})
+        ser.is_valid(raise_exception=True)
+        purchase = ser.save()
+        out = PurchaseSerializer(purchase, context={"request": request}).data
+        return Response(out, status=status.HTTP_201_CREATED)  
 
 
 class ExpenseViewSet(viewsets.ModelViewSet):
@@ -750,14 +775,12 @@ class StockAdjustmentViewSet(viewsets.ModelViewSet):
         adj = serializer.save(adjusted_by=self.request.user)
 
         product = adj.product
-        before = product.stock
-        after = adj.new_stock
+        before = int(product.stock or 0)
+        after = int(adj.new_stock or 0)
         delta = after - before
 
-        # Update stock
         Product.objects.filter(pk=product.pk).update(stock=after)
 
-        # Create movement log
         StockMovement.objects.create(
             product=product,
             movement_type=StockMovement.Type.ADJUSTMENT,

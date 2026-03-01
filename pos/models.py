@@ -153,6 +153,52 @@ class Product(models.Model):
 
     def __str__(self):
         return f"{self.name} ({self.code})"
+    
+    
+# ==========================================================
+# PURCHASES (Stock In from Supplier)
+# ==========================================================
+class Purchase(models.Model):
+    supplier = models.ForeignKey(Supplier, on_delete=models.SET_NULL, null=True, blank=True)
+    invoice_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
+
+    # ✅ FIX: DateField pakai date, bukan datetime
+    purchase_date = models.DateField(default=timezone.localdate, db_index=True)
+
+    note = models.TextField(blank=True, default="")
+
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True
+    )
+
+    class Meta:
+        ordering = ("-purchase_date", "-id")
+
+    def __str__(self):
+        sup = self.supplier.name if self.supplier else "No Supplier"
+        inv = self.invoice_id or f"Purchase #{self.id}"
+        return f"{inv} - {sup}"
+
+
+class PurchaseItem(models.Model):
+    purchase = models.ForeignKey(Purchase, related_name="items", on_delete=models.CASCADE)
+
+    # ✅ FIX: histori aman
+    product = models.ForeignKey(Product, on_delete=models.PROTECT)
+
+    quantity = models.PositiveIntegerField(default=1)
+    cost_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
+    expired_date = models.DateField(null=True, blank=True)
+
+    class Meta:
+        ordering = ("id",)
+
+    def __str__(self):
+        return f"{self.product.name} x{self.quantity}"
 
 
 # ========== ORDER ==========
@@ -280,6 +326,7 @@ class StockMovement(models.Model):
         SALE_RETURN = "SALE_RETURN", "Sale Return"
         ADJUSTMENT = "ADJUSTMENT", "Adjustment"
         COUNT = "COUNT", "Inventory Count"
+        PURCHASE = "PURCHASE", "Purchase"
 
     product = models.ForeignKey(Product, on_delete=models.CASCADE, related_name="movements")
     movement_type = models.CharField(max_length=20, choices=Type.choices, db_index=True)
