@@ -1,5 +1,6 @@
 from django.urls import path, include
 from .views_purchases import purchases_list_create, purchases_detail
+from pos.views_shift import shifts_list, shifts_open, shifts_close
 from rest_framework.routers import DefaultRouter
 
 from . import views
@@ -33,6 +34,10 @@ router.register(r"stockmovements", StockMovementViewSet, basename="stockmovement
 urlpatterns = [
     path("auth/login/", views.api_login, name="api_login"),
     path("auth/login", views.api_login, name="api_login_noslash"),
+    
+    path("shifts/", shifts_list, name="shifts_list"),
+    path("shifts/open/", shifts_open, name="shifts_open"),
+    path("shifts/<int:pk>/close/", shifts_close, name="shifts_close"),
 
     path("reports/daily-profit/", DailyProfitReportAPIView.as_view(), name="api_daily_profit"),
     path("reports/monthly-pl/", MonthlyPLReportAPIView.as_view(), name="api_monthly_pl"),

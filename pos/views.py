@@ -8,6 +8,7 @@ from django.contrib import admin as django_admin
 from django.contrib.auth.decorators import login_required
 from django.contrib.admin.views.decorators import staff_member_required
 from pos.permissions import IsSuperAdminOnly, AdminOnlyWriteOrRead
+from pos.permissions import AdminOrManagerWriteOrRead
 from django.http import HttpResponse
 from rest_framework import status
 from django.contrib.auth import authenticate
@@ -686,7 +687,7 @@ class BannerViewSet(ModelViewSet):
 class UnitViewSet(viewsets.ModelViewSet):
     queryset = Unit.objects.all().order_by("name")
     serializer_class = UnitSerializer
-    permission_classes = [AdminOnlyWriteOrRead]
+    permission_classes = [AdminOrManagerWriteOrRead]
 
     def get_serializer_context(self):
         return {"request": self.request}

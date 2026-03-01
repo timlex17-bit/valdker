@@ -32,6 +32,28 @@ class AdminOnlyWriteOrRead(BasePermission):
         return bool(user.is_superuser)
 
 
+class AdminOrManagerWriteOrRead(BasePermission):
+    """
+    Allow READ (GET/HEAD/OPTIONS) for any authenticated user,
+    but only superadmin OR role manager can WRITE (POST/PUT/PATCH/DELETE).
+    """
+    message = "Write access is admin/manager only."
+
+    def has_permission(self, request, view):
+        user = getattr(request, "user", None)
+        if not user or not user.is_authenticated:
+            return False
+
+        if request.method in SAFE_METHODS:
+            return True
+
+        # superadmin always allowed
+        if user.is_superuser:
+            return True
+
+        role = (getattr(user, "role", "") or "").lower().strip()
+        return role in ("manager", "admin")
+
 # ---------------------------------------------------------
 # Keep legacy permission name so imports won't crash.
 # Previously: IsOwnerOrManager existed in your project.
