@@ -360,6 +360,9 @@ class StockAdjustmentSerializer(serializers.ModelSerializer):
 class InventoryCountItemSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
     difference = serializers.SerializerMethodField()
+    
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    cost_price = serializers.DecimalField(source="product.buy_price", max_digits=10, decimal_places=2, read_only=True)
 
     class Meta:
         model = InventoryCountItem
