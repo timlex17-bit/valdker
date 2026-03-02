@@ -375,12 +375,12 @@ class InventoryCountSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "counted_at", "counted_by"]
 
     def create(self, validated_data):
-        request = self.context.get("request")
         items_data = validated_data.pop("items", [])
+        counted_by = validated_data.pop("counted_by", None)
 
         with transaction.atomic():
             obj = InventoryCount.objects.create(
-                counted_by=request.user if request and request.user.is_authenticated else None,
+                counted_by=counted_by,
                 **validated_data
             )
 

@@ -697,6 +697,16 @@ class InventoryCountViewSet(viewsets.ModelViewSet):
     serializer_class = InventoryCountSerializer
     permission_classes = [IsAuthenticated]
 
+    # ✅ WAJIB TAMBAH INI
+    def perform_create(self, serializer):
+        serializer.save(counted_by=self.request.user)
+
+    # (optional tapi recommended supaya context pasti ada)
+    def get_serializer_context(self):
+        ctx = super().get_serializer_context()
+        ctx["request"] = self.request
+        return ctx
+
     @action(detail=True, methods=["post"])
     def finalize(self, request, pk=None):
         inventory = self.get_object()
