@@ -358,6 +358,8 @@ class StockAdjustmentSerializer(serializers.ModelSerializer):
 
 
 class InventoryCountItemSerializer(serializers.ModelSerializer):
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
+
     class Meta:
         model = InventoryCountItem
         fields = ["id", "product", "system_stock", "counted_stock", "difference"]
@@ -373,21 +375,29 @@ class InventoryCountSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "counted_at", "counted_by"]
 
     def create(self, validated_data):
+        request = self.context.get("request")
         items_data = validated_data.pop("items", [])
-        obj = InventoryCount.objects.create(**validated_data)
 
-        for it in items_data:
-            product = it["product"]
-            counted_stock = it["counted_stock"]
-            system_stock = getattr(product, "stock", 0)  
-            diff = counted_stock - system_stock
-            InventoryCountItem.objects.create(
-                inventory_count=obj,
-                product=product,
-                system_stock=system_stock,
-                counted_stock=counted_stock,
-                difference=diff
+        with transaction.atomic():
+            obj = InventoryCount.objects.create(
+                counted_by=request.user if request and request.user.is_authenticated else None,
+                **validated_data
             )
+
+            for it in items_data:
+                product = it["product"]
+                counted_stock = it["counted_stock"]
+                system_stock = getattr(product, "stock", 0)
+                diff = counted_stock - system_stock
+
+                InventoryCountItem.objects.create(
+                    inventory_count=obj,
+                    product=product,
+                    system_stock=system_stock,
+                    counted_stock=counted_stock,
+                    difference=diff
+                )
+
         return obj
 
 class ProductReturnItemSerializer(serializers.ModelSerializer):
