@@ -404,11 +404,15 @@ class StockAdjustment(models.Model):
 # ==========================================================
 class InventoryCount(models.Model):
     STATUS_DRAFT = "DRAFT"
-    STATUS_DONE = "DONE"
+    STATUS_SUBMITTED = "SUBMITTED"
+    STATUS_APPROVED = "APPROVED"
+    STATUS_COMPLETED = "COMPLETED"
 
     STATUS_CHOICES = [
         (STATUS_DRAFT, "Draft"),
-        (STATUS_DONE, "Finalized"),
+        (STATUS_SUBMITTED, "Submitted"),
+        (STATUS_APPROVED, "Approved"),
+        (STATUS_COMPLETED, "Completed"),
     ]
 
     title = models.CharField(max_length=200)
@@ -416,7 +420,7 @@ class InventoryCount(models.Model):
     counted_at = models.DateTimeField(default=timezone.now)
     counted_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True)
 
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default=STATUS_DRAFT)
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_DRAFT)
 
     created_at = models.DateTimeField(auto_now_add=True)
 

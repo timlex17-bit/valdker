@@ -697,11 +697,9 @@ class InventoryCountViewSet(viewsets.ModelViewSet):
     serializer_class = InventoryCountSerializer
     permission_classes = [IsAuthenticated]
 
-    # ✅ WAJIB TAMBAH INI
     def perform_create(self, serializer):
         serializer.save(counted_by=self.request.user)
 
-    # (optional tapi recommended supaya context pasti ada)
     def get_serializer_context(self):
         ctx = super().get_serializer_context()
         ctx["request"] = self.request
@@ -711,7 +709,6 @@ class InventoryCountViewSet(viewsets.ModelViewSet):
     def finalize(self, request, pk=None):
         inventory = self.get_object()
 
-        # 🚫 Anti double finalize
         if inventory.status == InventoryCount.STATUS_DONE:
             return Response({"error": "Inventory already finalized"}, status=400)
 
@@ -724,11 +721,9 @@ class InventoryCountViewSet(viewsets.ModelViewSet):
                 difference = item.counted_stock - item.system_stock
 
                 if difference != 0:
-                    # ✅ Update stock
                     product.stock = item.counted_stock
                     product.save()
 
-                    # ✅ Create movement log
                     StockMovement.objects.create(
                         product=product,
                         movement_type="COUNT",
@@ -737,8 +732,8 @@ class InventoryCountViewSet(viewsets.ModelViewSet):
                         created_by=request.user,
                     )
 
-            inventory.status = InventoryCount.STATUS_DONE
-            inventory.save()
+            inventory.status = InventoryCount.STATUS_COMPLETED
+            inventory.save(update_fields=["status"])
 
         return Response({"status": "Finalized successfully"})
 
