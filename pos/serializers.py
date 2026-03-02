@@ -372,7 +372,8 @@ class InventoryCountItemSerializer(serializers.ModelSerializer):
 
 class InventoryCountSerializer(serializers.ModelSerializer):
     items = InventoryCountItemSerializer(many=True, required=False)
-
+    
+    counted_by = UserLiteSerializer(read_only=True)
     class Meta:
         model = InventoryCount
         fields = ["id", "title", "note", "counted_at", "counted_by", "items"]
