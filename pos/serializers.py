@@ -359,18 +359,29 @@ class StockAdjustmentSerializer(serializers.ModelSerializer):
 
 class InventoryCountItemSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
-    difference = serializers.SerializerMethodField()
-    
+
+    difference = serializers.ReadOnlyField()
+
     product_name = serializers.CharField(source="product.name", read_only=True)
-    cost_price = serializers.DecimalField(source="product.buy_price", max_digits=10, decimal_places=2, read_only=True)
+    cost_price = serializers.DecimalField(
+        source="product.buy_price",
+        max_digits=10,
+        decimal_places=2,
+        read_only=True
+    )
 
     class Meta:
         model = InventoryCountItem
-        fields = ["id", "product", "system_stock", "counted_stock", "difference"]
-        read_only_fields = ["id", "system_stock", "difference"]
-
-    def get_difference(self, obj):
-        return obj.counted_stock - obj.system_stock
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "system_stock",
+            "counted_stock",
+            "difference",
+            "cost_price",
+        ]
+        read_only_fields = ["id", "system_stock", "difference", "product_name", "cost_price"]
 
 
 class InventoryCountSerializer(serializers.ModelSerializer):
