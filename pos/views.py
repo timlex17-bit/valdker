@@ -7,6 +7,7 @@ from django.conf import settings
 from django.contrib import admin as django_admin
 from django.contrib.auth.decorators import login_required
 from django.contrib.admin.views.decorators import staff_member_required
+from rest_framework.parsers import MultiPartParser, FormParser
 from pos.permissions import IsSuperAdminOnly, AdminOnlyWriteOrRead
 from pos.permissions import AdminOrManagerWriteOrRead
 from django.http import HttpResponse
@@ -614,6 +615,7 @@ class SupplierViewSet(viewsets.ModelViewSet):
 class CategoryViewSet(viewsets.ModelViewSet):
     queryset = Category.objects.all().order_by("name")
     serializer_class = CategorySerializer
+    parser_classes = [MultiPartParser, FormParser]
 
     def get_serializer_context(self):
         return {"request": self.request}

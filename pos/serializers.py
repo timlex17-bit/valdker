@@ -45,7 +45,10 @@ class CategorySerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Category
-        fields = ["id", "name", "icon_url"]
+        fields = ["id", "name", "icon", "icon_url"]
+        extra_kwargs = {
+            "icon": {"required": False, "allow_null": True}
+        }
 
     def get_icon_url(self, obj):
         request = self.context.get("request")
@@ -56,7 +59,6 @@ class CategorySerializer(serializers.ModelSerializer):
             return _abs_or_raw(request, url)
         except Exception:
             return None
-
 
 class UnitSerializer(serializers.ModelSerializer):
     class Meta:
