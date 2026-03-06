@@ -47,18 +47,24 @@ class CategorySerializer(serializers.ModelSerializer):
         model = Category
         fields = ["id", "name", "icon", "icon_url"]
         extra_kwargs = {
-            "icon": {"required": False, "allow_null": True}
+            "icon": {"required": False, "allow_null": True},
         }
+
+    def validate_name(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("Category name is required.")
+        return value
 
     def get_icon_url(self, obj):
         request = self.context.get("request")
         try:
             if not obj.icon:
-                return None
+                return ""
             url = _force_https(obj.icon.url)
             return _abs_or_raw(request, url)
         except Exception:
-            return None
+            return ""
 
 class UnitSerializer(serializers.ModelSerializer):
     class Meta:
