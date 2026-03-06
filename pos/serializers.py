@@ -443,10 +443,8 @@ class InventoryCountSerializer(serializers.ModelSerializer):
         return obj
 
 class ProductReturnItemSerializer(serializers.ModelSerializer):
-    # READ: tampilkan object product (nama, sku, dll)
     product = ProductLiteSerializer(read_only=True)
 
-    # WRITE: tetap boleh kirim product_id (recommended)
     product_id = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.all(),
         source="product",
@@ -454,7 +452,6 @@ class ProductReturnItemSerializer(serializers.ModelSerializer):
         required=False
     )
 
-    # COMPAT: kalau client lama masih kirim "product": 3 (int), tetap diterima
     product_pk = serializers.PrimaryKeyRelatedField(
         queryset=Product.objects.all(),
         source="product",
@@ -467,7 +464,6 @@ class ProductReturnItemSerializer(serializers.ModelSerializer):
         fields = ["id", "product", "product_id", "product_pk", "quantity", "unit_price"]
 
     def validate(self, attrs):
-        # pastikan minimal ada product dari salah satu field
         if "product" not in attrs:
             raise serializers.ValidationError({"product_id": "product_id/product is required"})
         return attrs
