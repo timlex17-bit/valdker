@@ -350,20 +350,38 @@ class UserLiteSerializer(serializers.ModelSerializer):
         return getattr(obj, "full_name", "") or obj.username
 
 class StockAdjustmentSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    adjusted_by_name = serializers.SerializerMethodField()
+
     class Meta:
         model = StockAdjustment
         fields = [
             "id",
             "product",
+            "product_name",
             "old_stock",
             "new_stock",
             "reason",
             "note",
             "adjusted_at",
             "adjusted_by",
+            "adjusted_by_name",
         ]
-        read_only_fields = ["id", "adjusted_at", "adjusted_by"]
+        read_only_fields = [
+            "id",
+            "product_name",
+            "adjusted_at",
+            "adjusted_by",
+            "adjusted_by_name",
+        ]
 
+    def get_adjusted_by_name(self, obj):
+        if not obj.adjusted_by:
+            return ""
+        return (
+            getattr(obj.adjusted_by, "get_full_name", lambda: "")().strip()
+            or getattr(obj.adjusted_by, "username", "")
+        )
 
 class InventoryCountItemSerializer(serializers.ModelSerializer):
     product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.all())
