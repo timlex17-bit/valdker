@@ -299,12 +299,26 @@ class BannerSerializer(serializers.ModelSerializer):
 
 
 class ShopSerializer(serializers.ModelSerializer):
+    logo = serializers.ImageField(required=False, allow_null=True)
+    all_category_icon = serializers.ImageField(required=False, allow_null=True)
+
     logo_url = serializers.SerializerMethodField()
     all_category_icon_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Shop
-        fields = ["id", "name", "address", "phone", "email", "logo_url", "all_category_icon_url"]
+        fields = [
+            "id",
+            "name",
+            "address",
+            "phone",
+            "email",
+            "logo",
+            "all_category_icon",
+            "logo_url",
+            "all_category_icon_url",
+        ]
+        read_only_fields = ["id", "logo_url", "all_category_icon_url"]
 
     def get_logo_url(self, obj):
         try:

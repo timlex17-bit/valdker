@@ -9,6 +9,7 @@ from django.contrib.auth.decorators import login_required
 from django.contrib.admin.views.decorators import staff_member_required
 from rest_framework.parsers import MultiPartParser, FormParser
 from pos.permissions import IsSuperAdminOnly, AdminOnlyWriteOrRead
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from pos.permissions import AdminOrManagerWriteOrRead
 from django.http import HttpResponse
 from rest_framework import status
@@ -1058,3 +1059,4 @@ class ShopViewSet(viewsets.ModelViewSet):
     queryset = Shop.objects.all().order_by("-id")
     serializer_class = ShopSerializer
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
