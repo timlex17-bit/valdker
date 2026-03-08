@@ -11,21 +11,45 @@ from .models import Purchase, PurchaseItem, Supplier, Product, StockMovement
 # READ serializers
 # ==========================================================
 class PurchaseItemSerializer(serializers.ModelSerializer):
-    product_id = serializers.IntegerField(source="product.id", read_only=True)
     product_name = serializers.CharField(source="product.name", read_only=True)
-    product_code = serializers.CharField(source="product.code", read_only=True)
 
     class Meta:
         model = PurchaseItem
+        fields = ["id", "product", "product_name", "quantity", "cost_price", "expired_date"]
+
+
+class PurchaseDetailSerializer(serializers.ModelSerializer):
+    supplier_id = serializers.IntegerField(source="supplier.id", read_only=True)
+    supplier_name = serializers.CharField(source="supplier.name", read_only=True, default="")
+    items_count = serializers.SerializerMethodField()
+    total_cost = serializers.SerializerMethodField()
+    items = PurchaseItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Purchase
         fields = [
             "id",
-            "product_id",
-            "product_name",
-            "product_code",
-            "quantity",
-            "cost_price",
-            "expired_date",
+            "invoice_id",
+            "supplier_id",
+            "supplier_name",
+            "purchase_date",
+            "note",
+            "created_at",
+            "items_count",
+            "total_cost",
+            "items",
         ]
+
+    def get_items_count(self, obj):
+        return sum((item.quantity or 0) for item in obj.items.all())
+
+    def get_total_cost(self, obj):
+        total = Decimal("0.00")
+        for item in obj.items.all():
+            qty = item.quantity or 0
+            cost = item.cost_price or Decimal("0.00")
+            total += Decimal(qty) * cost
+        return f"{total:.2f}"
 
 
 class PurchaseListSerializer(serializers.ModelSerializer):
