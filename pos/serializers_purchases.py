@@ -1,5 +1,6 @@
 from django.db import transaction
 from django.utils import timezone
+from decimal import Decimal
 from django.utils.dateparse import parse_date
 
 from rest_framework import serializers
