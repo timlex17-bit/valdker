@@ -19,12 +19,11 @@ class PurchaseItemSerializer(serializers.ModelSerializer):
         fields = ["id", "product", "product_name", "quantity", "cost_price", "expired_date"]
 
 
-class PurchaseDetailSerializer(serializers.ModelSerializer):
+class PurchaseBaseSerializer(serializers.ModelSerializer):
     supplier_id = serializers.IntegerField(source="supplier.id", read_only=True)
     supplier_name = serializers.CharField(source="supplier.name", read_only=True, default="")
     items_count = serializers.SerializerMethodField()
     total_cost = serializers.SerializerMethodField()
-    items = PurchaseItemSerializer(many=True, read_only=True)
 
     class Meta:
         model = Purchase
@@ -34,11 +33,9 @@ class PurchaseDetailSerializer(serializers.ModelSerializer):
             "supplier_id",
             "supplier_name",
             "purchase_date",
-            "note",
             "created_at",
             "items_count",
             "total_cost",
-            "items",
         ]
 
     def get_items_count(self, obj):
@@ -53,39 +50,16 @@ class PurchaseDetailSerializer(serializers.ModelSerializer):
         return f"{total:.2f}"
 
 
-class PurchaseListSerializer(serializers.ModelSerializer):
-    supplier_id = serializers.IntegerField(source="supplier.id", read_only=True)
-    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
-    items_count = serializers.IntegerField(source="items.count", read_only=True)
-
-    class Meta:
-        model = Purchase
-        fields = [
-            "id",
-            "invoice_id",
-            "supplier_id",
-            "supplier_name",
-            "purchase_date",
-            "created_at",
-            "items_count",
-        ]
+class PurchaseListSerializer(PurchaseBaseSerializer):
+    pass
 
 
-class PurchaseDetailSerializer(serializers.ModelSerializer):
-    supplier_id = serializers.IntegerField(source="supplier.id", read_only=True)
-    supplier_name = serializers.CharField(source="supplier.name", read_only=True)
+class PurchaseDetailSerializer(PurchaseBaseSerializer):
     items = PurchaseItemSerializer(many=True, read_only=True)
 
-    class Meta:
-        model = Purchase
-        fields = [
-            "id",
-            "invoice_id",
-            "supplier_id",
-            "supplier_name",
-            "purchase_date",
+    class Meta(PurchaseBaseSerializer.Meta):
+        fields = PurchaseBaseSerializer.Meta.fields + [
             "note",
-            "created_at",
             "created_by",
             "items",
         ]

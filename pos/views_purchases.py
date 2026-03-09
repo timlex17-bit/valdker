@@ -4,7 +4,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from .models import Purchase
-from .serializers_purchases import PurchaseCreateSerializer, PurchaseListSerializer, PurchaseDetailSerializer
+from .serializers_purchases import (
+    PurchaseCreateSerializer,
+    PurchaseListSerializer,
+    PurchaseDetailSerializer,
+)
 
 
 def _role_ok(user):
@@ -15,21 +19,30 @@ def _role_ok(user):
 @api_view(["GET", "POST"])
 @permission_classes([IsAuthenticated])
 def purchases_list_create(request):
-    # admin/manager only
     if not _role_ok(request.user):
         return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
     if request.method == "GET":
-        qs = Purchase.objects.prefetch_related("items", "supplier").all()
+        qs = (
+            Purchase.objects
+            .select_related("supplier")
+            .prefetch_related("items", "items__product")
+            .all()
+        )
         ser = PurchaseListSerializer(qs, many=True)
         return Response(ser.data)
 
-    # POST
     ser = PurchaseCreateSerializer(data=request.data, context={"request": request})
     ser.is_valid(raise_exception=True)
     p = ser.save()
 
-    # return detail-ish data
+    p = (
+        Purchase.objects
+        .select_related("supplier")
+        .prefetch_related("items", "items__product")
+        .get(pk=p.pk)
+    )
+
     out = PurchaseDetailSerializer(p).data
     return Response(out, status=status.HTTP_201_CREATED)
 
@@ -41,7 +54,12 @@ def purchases_detail(request, pk: int):
         return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
     try:
-        p = Purchase.objects.prefetch_related("items", "supplier").get(pk=pk)
+        p = (
+            Purchase.objects
+            .select_related("supplier")
+            .prefetch_related("items", "items__product")
+            .get(pk=pk)
+        )
     except Purchase.DoesNotExist:
         return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
 
