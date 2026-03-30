@@ -18,7 +18,8 @@ from .views import (
     BankAccountViewSet,
     SalePaymentViewSet,
     BankLedgerViewSet,
-    PurchaseViewSet
+    PurchaseViewSet,
+    StaffViewSet,
 )
 
 router = DefaultRouter()
@@ -32,6 +33,7 @@ router.register(r"units", UnitViewSet, basename="unit")
 router.register(r"orders", OrderViewSet, basename="order")
 router.register(r"shops", ShopViewSet, basename="shop")
 router.register(r"expenses", ExpenseViewSet, basename="expense")
+router.register(r"staff", StaffViewSet, basename="staff")
 
 router.register(r"payment-methods", PaymentMethodViewSet, basename="payment-methods")
 router.register(r"bank-accounts", BankAccountViewSet, basename="bank-accounts")

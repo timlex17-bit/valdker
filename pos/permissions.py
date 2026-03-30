@@ -317,6 +317,59 @@ class BankAccountPermission(BasePermission):
         return _is_tenant_owner(user)
 
 
+class ShopStaffPermission(BasePermission):
+    """
+    Staff per shop:
+    - superuser: full access
+    - owner: full CRUD untuk staff di shop sendiri
+    - manager: read only staff di shop sendiri
+    - cashier: tidak boleh akses
+    """
+
+    message = "You do not have permission to manage shop staff."
+
+    def has_permission(self, request, view):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        if user.is_superuser:
+            return True
+
+        role = (getattr(user, "role", "") or "").lower().strip()
+        has_shop = bool(getattr(user, "shop_id", None))
+
+        if not has_shop:
+            return False
+
+        if request.method in SAFE_METHODS:
+            return role in {"owner", "manager"}
+
+        return role == "owner"
+
+    def has_object_permission(self, request, view, obj):
+        user = request.user
+
+        if not user or not user.is_authenticated:
+            return False
+
+        if user.is_superuser:
+            return True
+
+        user_shop_id = getattr(user, "shop_id", None)
+        obj_shop_id = getattr(obj, "shop_id", None)
+
+        if not user_shop_id or user_shop_id != obj_shop_id:
+            return False
+
+        role = (getattr(user, "role", "") or "").lower().strip()
+
+        if request.method in SAFE_METHODS:
+            return role in {"owner", "manager"}
+
+        return role == "owner"
+
 # =========================================================
 # OPTIONAL GENERIC TENANT OBJECT PERMISSION
 # =========================================================

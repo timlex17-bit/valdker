@@ -1353,6 +1353,166 @@ class UserLiteSerializer(serializers.ModelSerializer):
 
 
 # ==========================================================
+# Staff / Shop User
+# ==========================================================
+class StaffSerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField(read_only=True)
+    role_label = serializers.SerializerMethodField(read_only=True)
+    shop_id = serializers.IntegerField(source="shop.id", read_only=True)
+    shop_name = serializers.CharField(source="shop.name", read_only=True)
+    shop_code = serializers.CharField(source="shop.code", read_only=True)
+
+    password = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=False,
+        style={"input_type": "password"}
+    )
+
+    class Meta:
+        model = User
+        fields = [
+            "id",
+            "username",
+            "full_name",
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "role_label",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "is_active",
+            "date_joined",
+            "password",
+        ]
+        read_only_fields = [
+            "id",
+            "full_name",
+            "role_label",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "date_joined",
+        ]
+        extra_kwargs = {
+            "username": {"required": True},
+            "first_name": {"required": False, "allow_blank": True},
+            "last_name": {"required": False, "allow_blank": True},
+            "email": {"required": False, "allow_blank": True},
+            "role": {"required": True},
+            "is_active": {"required": False},
+        }
+
+    def get_full_name(self, obj):
+        if hasattr(obj, "get_full_name"):
+            return obj.get_full_name().strip() or obj.username
+        return obj.username
+
+    def get_role_label(self, obj):
+        return getattr(obj, "role_label", obj.role)
+
+    def validate(self, attrs):
+        user = require_authenticated_user(self.context)
+        shop = require_tenant_shop(self.context)
+
+        username = clean_str(attrs.get("username") or getattr(self.instance, "username", ""))
+        email = clean_str(attrs.get("email") or getattr(self.instance, "email", ""))
+        first_name = clean_str(attrs.get("first_name") or getattr(self.instance, "first_name", ""))
+        last_name = clean_str(attrs.get("last_name") or getattr(self.instance, "last_name", ""))
+        role = clean_str(attrs.get("role") or getattr(self.instance, "role", "")).lower()
+
+        if not username:
+            raise serializers.ValidationError({"username": "Username is required."})
+
+        allowed_roles = {"owner", "manager", "cashier"}
+        if role not in allowed_roles:
+            raise serializers.ValidationError({
+                "role": "Role must be one of: owner, manager, cashier."
+            })
+
+        attrs["username"] = username
+        attrs["email"] = email
+        attrs["first_name"] = first_name
+        attrs["last_name"] = last_name
+        attrs["role"] = role
+
+        # Owner shop hanya boleh kelola user di shop sendiri
+        qs = User.objects.filter(username__iexact=username)
+        if not user.is_superuser:
+            qs = qs.filter(shop=shop)
+
+        if self.instance:
+            qs = qs.exclude(pk=self.instance.pk)
+
+        if qs.exists():
+            raise serializers.ValidationError({
+                "username": "Username already exists in this shop."
+            })
+
+        # Optional: email unique per shop bila diisi
+        if email:
+            email_qs = User.objects.filter(email__iexact=email)
+            if not user.is_superuser:
+                email_qs = email_qs.filter(shop=shop)
+
+            if self.instance:
+                email_qs = email_qs.exclude(pk=self.instance.pk)
+
+            if email_qs.exists():
+                raise serializers.ValidationError({
+                    "email": "Email already exists in this shop."
+                })
+
+        password = attrs.get("password", None)
+        if not self.instance and not password:
+            raise serializers.ValidationError({
+                "password": "Password is required when creating staff."
+            })
+
+        return attrs
+
+    def create(self, validated_data):
+        shop = require_tenant_shop(self.context)
+
+        password = validated_data.pop("password", None)
+
+        user = User(
+            **validated_data,
+            shop=shop,
+            is_staff=False,
+            is_superuser=False,
+        )
+
+        if password:
+            user.set_password(password)
+        else:
+            user.set_unusable_password()
+
+        user.save()
+        return user
+
+    def update(self, instance, validated_data):
+        ensure_instance_belongs_to_shop(instance, self.context)
+
+        password = validated_data.pop("password", None)
+
+        for attr, value in validated_data.items():
+            setattr(instance, attr, value)
+
+        # cegah shop dipindah lewat endpoint ini
+        if hasattr(instance, "shop_id"):
+            shop = require_tenant_shop(self.context)
+            instance.shop = shop
+
+        if password:
+            instance.set_password(password)
+
+        instance.save()
+        return instance
+
+# ==========================================================
 # Stock Adjustment
 # ==========================================================
 class StockAdjustmentSerializer(serializers.ModelSerializer):

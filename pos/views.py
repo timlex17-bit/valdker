@@ -48,13 +48,15 @@ from .permissions import (
     OwnerOrManagerWriteOrRead,
     IsOwnerOrManagerOrPlatformAdmin,
     BankAccountPermission,
+    ShopStaffPermission,
 )
 from .serializers import (
     OrderSerializer, CustomerSerializer, SupplierSerializer,
     ProductSerializer, CategorySerializer, UnitSerializer, ShopSerializer,
     ExpenseSerializer, BannerSerializer,
     StockAdjustmentSerializer, InventoryCountSerializer, ProductReturnSerializer, StockMovementSerializer,
-    PaymentMethodSerializer, BankAccountSerializer, SalePaymentSerializer, BankLedgerSerializer
+    PaymentMethodSerializer, BankAccountSerializer, SalePaymentSerializer, BankLedgerSerializer,
+    StaffSerializer,
 )
 from .serializers_purchases import PurchaseSerializer, PurchaseCreateSerializer
 
@@ -1741,3 +1743,84 @@ class ShopViewSet(RequestContextMixin, viewsets.ModelViewSet):
 
     def perform_update(self, serializer):
         serializer.save()
+        
+        
+# =========================
+# Staff API
+# =========================
+class StaffViewSet(RequestContextMixin, viewsets.ModelViewSet):
+    serializer_class = StaffSerializer
+    permission_classes = [IsAuthenticated, ShopStaffPermission]
+
+    def get_queryset(self):
+        user = self.request.user
+
+        if user.is_superuser:
+            return CustomUser.objects.select_related("shop").all().order_by("-id")
+
+        shop = _user_shop(self.request)
+        if not shop:
+            return CustomUser.objects.none()
+
+        qs = CustomUser.objects.select_related("shop").filter(shop=shop).order_by("-id")
+
+        search = (self.request.query_params.get("search") or "").strip()
+        role = (self.request.query_params.get("role") or "").strip().lower()
+        is_active = self.request.query_params.get("is_active")
+
+        if search:
+            qs = qs.filter(
+                models.Q(username__icontains=search) |
+                models.Q(first_name__icontains=search) |
+                models.Q(last_name__icontains=search) |
+                models.Q(email__icontains=search)
+            )
+
+        if role:
+            qs = qs.filter(role=role)
+
+        if is_active is not None:
+            val = str(is_active).lower().strip()
+            if val in ("true", "1", "yes"):
+                qs = qs.filter(is_active=True)
+            elif val in ("false", "0", "no"):
+                qs = qs.filter(is_active=False)
+
+        return qs
+
+    def perform_create(self, serializer):
+        if self.request.user.is_superuser:
+            # superuser boleh buat staff tenant jika dirinya sudah punya shop context?
+            # karena endpoint ini konsepnya shop-scoped, tetap lebih aman wajib shop context
+            shop = _user_shop(self.request)
+            if not shop:
+                raise ValidationError("Superuser must have shop context to create staff from this endpoint.")
+            serializer.save()
+            return
+
+        shop = _require_user_shop(self.request)
+        serializer.save(shop=shop)
+
+    def perform_update(self, serializer):
+        instance = self.get_object()
+
+        if not self.request.user.is_superuser:
+            shop = _require_user_shop(self.request)
+            if instance.shop_id != shop.id:
+                raise ValidationError("Staff ini tidak berasal dari shop Anda.")
+
+        serializer.save()
+
+    def perform_destroy(self, instance):
+        user = self.request.user
+
+        if not user.is_superuser:
+            shop = _require_user_shop(self.request)
+            if instance.shop_id != shop.id:
+                raise ValidationError("Staff ini tidak berasal dari shop Anda.")
+
+            # owner tidak boleh hapus dirinya sendiri
+            if instance.id == user.id:
+                raise ValidationError("Anda tidak bisa menghapus akun Anda sendiri.")
+
+        instance.delete()        
