@@ -1,342 +1,914 @@
-from django.contrib import admin
+from django.contrib import admin, messages
 from django.contrib.auth.admin import UserAdmin
+from django.db import transaction
 from django.http import HttpResponseRedirect, HttpResponse
-from .models import Purchase, PurchaseItem
-from .models import TokenProxy
-from rest_framework.authtoken.models import Token
+from django.utils.http import urlencode
 from django.urls import reverse
 from django.utils.html import format_html
+from django import forms
+from django.contrib.auth.forms import ReadOnlyPasswordHashField
 
 from reportlab.pdfgen import canvas
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
-from pos.models_shift import Shift
 from reportlab.graphics.barcode import code128
 
+from pos.models_shift import Shift
+from pos.forms import ShopAdminForm
+from pos.services import ShopProvisionService
+
 from .models import (
-    Banner, CustomUser,
+    Banner, PlatformUser, ShopStaffUser, TokenProxy,
     Customer, Supplier, Category, Unit,
-    Product, Order, OrderItem, Expense, Shop,
-    StockAdjustment, InventoryCount, InventoryCountItem,
-    ProductReturn, ProductReturnItem, StockMovement
+    Product, Order, Expense, Shop,
+    StockAdjustment, InventoryCount,
+    ProductReturn, StockMovement,
+    PaymentMethod, BankAccount, SalePayment, BankLedger,
+    Purchase, PurchaseItem
 )
 
+
+# ==========================================================
+# TOKEN ADMIN
+# ==========================================================
 @admin.register(TokenProxy)
 class TokenProxyAdmin(admin.ModelAdmin):
-    list_display = ("key", "user", "created")
-    search_fields = ("key", "user__username", "user__email")
+
+    list_display = ("key","user","created")
+
+    search_fields = (
+        "key",
+        "user__username",
+        "user__email"
+    )
+
     ordering = ("-created",)
 
-    def has_module_permission(self, request):
+    def has_module_permission(self,request):
         return request.user.is_superuser
 
-    def has_view_permission(self, request, obj=None):
+    def has_view_permission(self,request,obj=None):
         return request.user.is_superuser
 
 
-# admin.site.register(Token)
+# ==========================================================
+# PURCHASE ADMIN
+# ==========================================================
 
 class PurchaseItemInline(admin.TabularInline):
+
     model = PurchaseItem
+
     extra = 0
+
 
 @admin.register(Purchase)
 class PurchaseAdmin(admin.ModelAdmin):
-    list_display = ("id", "invoice_id", "supplier", "purchase_date", "created_at", "created_by")
-    list_filter = ("purchase_date", "supplier")
-    search_fields = ("invoice_id", "supplier__name")
+
+    list_display = (
+        "id",
+        "shop",
+        "invoice_id",
+        "supplier",
+        "purchase_date",
+        "created_at",
+        "created_by"
+    )
+
+    list_filter = (
+        "shop",
+        "purchase_date",
+        "supplier"
+    )
+
+    search_fields = (
+        "invoice_id",
+        "supplier__name"
+    )
+
     inlines = [PurchaseItemInline]
 
+
 # ==========================================================
-# PDF Barcode Printing (Admin)
+# PDF BARCODE
 # ==========================================================
+
 def _barcode_pdf_response(filename="barcodes.pdf"):
+
     resp = HttpResponse(content_type="application/pdf")
+
     resp["Content-Disposition"] = f'inline; filename="{filename}"'
+
     return resp
 
 
-def print_barcodes_pdf(modeladmin, request, queryset):
-    """
-    Admin action: print selected products barcode labels into a PDF.
-    Uses Product.code as barcode value, and Product.sku as optional text.
-    """
+def print_barcodes_pdf(modeladmin,request,queryset):
+
     resp = _barcode_pdf_response("product_barcodes.pdf")
-    c = canvas.Canvas(resp, pagesize=A4)
-    width, height = A4
 
-    label_w = 70 * mm
-    label_h = 35 * mm
-    margin_x = 10 * mm
-    margin_y = 10 * mm
-    gap_x = 5 * mm
-    gap_y = 5 * mm
+    c = canvas.Canvas(resp,pagesize=A4)
 
-    cols = int((width - 2 * margin_x + gap_x) // (label_w + gap_x))
+    width,height = A4
+
+    label_w = 70*mm
+    label_h = 35*mm
+
+    margin_x = 10*mm
+    margin_y = 10*mm
+
+    gap_x = 5*mm
+    gap_y = 5*mm
+
+    cols = int((width-2*margin_x+gap_x)//(label_w+gap_x))
+
     if cols < 1:
         cols = 1
 
     x = margin_x
-    y = height - margin_y - label_h
+    y = height-margin_y-label_h
 
-    def draw_label(prod: Product, x0, y0):
-        c.roundRect(x0, y0, label_w, label_h, 6, stroke=1, fill=0)
+    def draw_label(prod,x0,y0):
+
+        c.roundRect(x0,y0,label_w,label_h,6)
 
         name = (prod.name or "")[:26]
-        sku = (getattr(prod, "sku", "") or "")[:22]
-        price = f"${prod.sell_price}" if prod.sell_price is not None else ""
 
-        c.setFont("Helvetica-Bold", 9)
-        c.drawString(x0 + 4 * mm, y0 + label_h - 7 * mm, name)
+        sku = (getattr(prod,"sku","") or "")[:22]
 
-        c.setFont("Helvetica", 8)
+        price = f"${prod.sell_price}"
+
+        c.setFont("Helvetica-Bold",9)
+
+        c.drawString(x0+4*mm,y0+label_h-7*mm,name)
+
+        c.setFont("Helvetica",8)
+
         if sku:
-            c.drawString(x0 + 4 * mm, y0 + label_h - 12 * mm, f"SKU: {sku}")
-        c.drawString(x0 + 4 * mm, y0 + label_h - 17 * mm, f"Price: {price}")
+            c.drawString(x0+4*mm,y0+label_h-12*mm,f"SKU: {sku}")
+
+        c.drawString(x0+4*mm,y0+label_h-17*mm,f"Price: {price}")
 
         value = (prod.code or "").strip()
+
         if value:
-            bc = code128.Code128(value, barHeight=12 * mm, humanReadable=True)
-            bc.drawOn(c, x0 + 4 * mm, y0 + 4 * mm)
-        else:
-            c.setFont("Helvetica-Oblique", 8)
-            c.drawString(x0 + 4 * mm, y0 + 8 * mm, "No barcode (code)")
 
-    items = list(queryset.order_by("name"))
-    for i, prod in enumerate(items):
-        if y < margin_y:
+            bc = code128.Code128(
+                value,
+                barHeight=12*mm,
+                humanReadable=True
+            )
+
+            bc.drawOn(c,x0+4*mm,y0+4*mm)
+
+    items=list(queryset.order_by("name"))
+
+    for i,prod in enumerate(items):
+
+        if y<margin_y:
+
             c.showPage()
-            y = height - margin_y - label_h
-            x = margin_x
 
-        draw_label(prod, x, y)
+            y=height-margin_y-label_h
 
-        if (i + 1) % cols == 0:
-            x = margin_x
-            y -= (label_h + gap_y)
+            x=margin_x
+
+        draw_label(prod,x,y)
+
+        if (i+1)%cols==0:
+
+            x=margin_x
+
+            y-=(label_h+gap_y)
+
         else:
-            x += (label_w + gap_x)
+
+            x+=(label_w+gap_x)
 
     c.showPage()
+
     c.save()
+
     return resp
 
 
-print_barcodes_pdf.short_description = "🖨️ Print Barcodes (PDF)"
+print_barcodes_pdf.short_description="Print Barcodes"
 
 
 # ==========================================================
-# Product Admin
+# PRODUCT ADMIN
 # ==========================================================
+
 @admin.register(Product)
 class ProductAdmin(admin.ModelAdmin):
-    list_display = (
-        "id", "name", "code", "sku", "sell_price",
-        "weight_display", "supplier", "stock", "barcode_pdf_link"
+
+    list_display=(
+
+        "id",
+        "shop",
+        "name",
+        "code",
+        "sku",
+        "sell_price",
+        "supplier",
+        "stock",
+        "barcode_pdf_link"
+
     )
-    search_fields = ("name", "code", "sku", "supplier__name")
-    list_filter = ("category", "supplier")
-    ordering = ("-id",)
 
-    actions = ["action_print_barcodes_pdf"]
+    search_fields=(
 
-    # 🔒 LOCK STOCK SAAT EDIT
-    def get_readonly_fields(self, request, obj=None):
-        if obj:  # kalau edit existing product
-            return ("stock",)
-        return ()
+        "name",
+        "code",
+        "sku",
+        "supplier__name"
 
-    def weight_display(self, obj):
-        return f"{obj.weight} {obj.unit.name if obj.unit else ''}"
-    weight_display.short_description = "Weight"
+    )
 
-    def barcode_pdf_link(self, obj):
-        url = f"/admin/print-barcodes/?ids={obj.id}"
+    list_filter=(
+
+        "shop",
+        "category",
+        "supplier"
+
+    )
+
+    ordering=("-id",)
+
+    actions=["action_print_barcodes_pdf"]
+
+    def get_readonly_fields(self,request,obj=None):
+
+        if obj:
+            return("stock",)
+
+        return()
+
+    def barcode_pdf_link(self,obj):
+
+        url=f"/admin/print-barcodes/?ids={obj.id}"
+
         return format_html(
-            '<a class="button" href="{}" target="_blank">🖨️ Barcode</a>', url
+            '<a class="button" href="{}">Barcode</a>',
+            url
         )
-    barcode_pdf_link.short_description = "Barcode PDF"
 
-    @admin.action(description="🖨️ Print Barcodes (PDF)")
-    def action_print_barcodes_pdf(self, request, queryset):
-        ids = ",".join(str(x) for x in queryset.values_list("id", flat=True))
-        url = f"/admin/print-barcodes/?ids={ids}"
+    def action_print_barcodes_pdf(self,request,queryset):
+
+        ids=",".join(
+            str(x)
+            for x in queryset.values_list("id",flat=True)
+        )
+
+        url=f"/admin/print-barcodes/?ids={ids}"
+
         return HttpResponseRedirect(url)
 
 
+# ==========================================================
+# BANK ACCOUNT
+# ==========================================================
+
+@admin.register(BankAccount)
+class BankAccountAdmin(admin.ModelAdmin):
+
+    list_display=(
+
+        "id",
+        "shop",
+        "name",
+        "bank_name",
+        "account_number",
+        "account_holder",
+        "account_type",
+        "opening_balance",
+        "current_balance",
+        "is_active"
+
+    )
+
+    list_filter=(
+
+        "shop",
+        "account_type",
+        "is_active",
+        "bank_name"
+
+    )
+
+    search_fields=(
+
+        "name",
+        "bank_name",
+        "account_number"
+
+    )
+
+    ordering=("bank_name","name")
+
+    list_editable=("is_active",)
+
+    autocomplete_fields=("shop",)
+
 
 # ==========================================================
-# Order Admin
+# ORDER ADMIN
 # ==========================================================
+
+class SalePaymentInline(admin.TabularInline):
+
+    model=SalePayment
+
+    extra=0
+
+
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = (
+
+    inlines=[SalePaymentInline]
+
+    list_display=(
+
         "invoice_number",
-        "id",
+        "shop",
         "customer_name",
-        "order_type",
         "total",
-        "payment_method",
-        "created_at_formatted",
-        "served_by_display",
-        "is_paid",
-        "receipt_link",
+        "created_at",
+        "served_by_display"
+
     )
-    search_fields = ("invoice_number", "customer__name", "id")
-    list_filter = ("payment_method", "is_paid", "default_order_type")
-    ordering = ("-created_at",)
-    exclude = ("served_by",)
 
-    def customer_name(self, obj):
-        return obj.customer.name if obj.customer else "Walk In Customer"
-    customer_name.short_description = "Name"
+    list_filter=(
 
-    def order_type(self, obj):
-        try:
-            return obj.get_default_order_type_display()
-        except Exception:
-            return "Take-Out"
-    order_type.short_description = "Type"
+        "shop",
+        "payment_method",
+        "is_paid"
 
-    def created_at_formatted(self, obj):
-        return obj.created_at.strftime("%I:%M %p, %d %B, %Y")
-    created_at_formatted.short_description = "Time"
+    )
 
-    def served_by_display(self, obj):
-        if not obj.served_by:
-            return "-"
-        full_name = getattr(obj.served_by, "full_name", None)
-        return full_name or obj.served_by.username
-    served_by_display.short_description = "Served By"
+    ordering=("-created_at",)
 
-    def receipt_link(self, obj):
-        url = reverse("order_receipt_pdf", args=[obj.id])
-        return format_html('<a class="button" href="{}" target="_blank">🧾</a>', url)
-    receipt_link.short_description = "Receipt"
+    def customer_name(self,obj):
 
-    def get_queryset(self, request):
-        qs = super().get_queryset(request)
-        # Admin site only accessible by superuser anyway,
-        # but keep logic safe if staff changes later
-        if request.user.is_superuser:
-            return qs
-        return qs.filter(served_by=request.user)
+        if obj.customer:
+            return obj.customer.name
 
-    def save_model(self, request, obj, form, change):
+        return "Walk In"
+
+    def served_by_display(self,obj):
+
+        if obj.served_by:
+            return obj.served_by.username
+
+        return "-"
+
+    def save_model(self,request,obj,form,change):
+
         if not obj.served_by_id:
-            obj.served_by = request.user
-        super().save_model(request, obj, form, change)
 
+            obj.served_by=request.user
 
-@admin.register(Banner)
-class BannerAdmin(admin.ModelAdmin):
-    list_display = ["title", "active"]
+        if not obj.shop_id:
+
+            obj.shop=request.user.shop
+
+        super().save_model(request,obj,form,change)
 
 
 # ==========================================================
-# Inventory Admins
+# INVENTORY
 # ==========================================================
+
+@admin.register(StockMovement)
+class StockMovementAdmin(admin.ModelAdmin):
+
+    list_display=(
+
+        "id",
+        "shop",
+        "product",
+        "movement_type",
+        "quantity_delta",
+        "before_stock",
+        "after_stock",
+        "created_at"
+
+    )
+
+    list_filter=(
+
+        "shop",
+        "movement_type"
+
+    )
+
+
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
-    list_display = ("id", "product", "old_stock", "new_stock", "reason", "adjusted_at", "adjusted_by")
-    search_fields = ("product__name", "product__code", "product__sku")
-    list_filter = ("reason",)
-    ordering = ("-adjusted_at", "-id")
 
+    list_display=(
 
-class InventoryCountItemInline(admin.TabularInline):
-    model = InventoryCountItem
-    extra = 0
+        "id",
+        "shop",
+        "product",
+        "old_stock",
+        "new_stock",
+        "reason",
+        "adjusted_at"
+
+    )
+
+    list_filter=(
+
+        "shop",
+        "reason"
+
+    )
 
 
 @admin.register(InventoryCount)
 class InventoryCountAdmin(admin.ModelAdmin):
-    list_display = ("id", "title", "counted_at", "counted_by")
-    inlines = [InventoryCountItemInline]
-    ordering = ("-counted_at", "-id")
 
+    list_display=(
 
-class ProductReturnItemInline(admin.TabularInline):
-    model = ProductReturnItem
-    extra = 0
+        "id",
+        "shop",
+        "title",
+        "counted_at"
+
+    )
+
+    list_filter=(
+
+        "shop",
+        "status"
+
+    )
 
 
 @admin.register(ProductReturn)
 class ProductReturnAdmin(admin.ModelAdmin):
-    list_display = ("id", "order", "customer", "returned_at", "returned_by")
-    inlines = [ProductReturnItemInline]
-    ordering = ("-returned_at", "-id")
 
+    list_display=(
 
-@admin.register(StockMovement)
-class StockMovementAdmin(admin.ModelAdmin):
-    list_display = ("id", "product", "movement_type", "quantity_delta", "before_stock", "after_stock", "created_at", "created_by")
-    search_fields = ("product__name", "product__code", "product__sku")
-    list_filter = ("movement_type",)
-    ordering = ("-created_at", "-id")
+        "id",
+        "shop",
+        "order",
+        "customer",
+        "returned_at"
+
+    )
+
+    list_filter=(
+
+        "shop",
+
+    )
 
 
 # ==========================================================
-# Simple registrations
+# SIMPLE ADMINS
 # ==========================================================
-admin.site.register(Customer)
-admin.site.register(Supplier)
-admin.site.register(Category)
-admin.site.register(Unit)
-admin.site.register(Expense)
-admin.site.register(Shop)
+
+@admin.register(Customer)
+class CustomerAdmin(admin.ModelAdmin):
+
+    list_display=(
+
+        "id",
+        "shop",
+        "name",
+        "cell",
+        "email"
+
+    )
+
+    list_filter=("shop",)
 
 
-@admin.register(CustomUser)
-class CustomUserAdmin(UserAdmin):
-    """
-    Clean Jazzmin UI:
-    - ONLY dropdown role
-    - No groups / user_permissions
-    - No manual is_staff / is_superuser (auto-synced in model.save)
-    """
+@admin.register(Supplier)
+class SupplierAdmin(admin.ModelAdmin):
 
+    list_display=(
+
+        "id",
+        "shop",
+        "name",
+        "cell"
+
+    )
+
+    list_filter=("shop",)
+
+
+@admin.register(Category)
+class CategoryAdmin(admin.ModelAdmin):
+
+    list_display=(
+
+        "id",
+        "shop",
+        "name"
+
+    )
+
+    list_filter=("shop",)
+
+
+@admin.register(Unit)
+class UnitAdmin(admin.ModelAdmin):
+
+    list_display=(
+
+        "id",
+        "shop",
+        "name"
+
+    )
+
+    list_filter=("shop",)
+
+
+@admin.register(Expense)
+class ExpenseAdmin(admin.ModelAdmin):
+
+    list_display=(
+
+        "id",
+        "shop",
+        "name",
+        "amount",
+        "date"
+
+    )
+
+    list_filter=("shop",)
+    
+
+class ShopStaffInlineForm(forms.ModelForm):
+    password = ReadOnlyPasswordHashField(
+        label="Password",
+        help_text="Password tidak ditampilkan. Gunakan halaman user terpisah jika ingin reset password."
+    )
+
+    class Meta:
+        model = ShopStaffUser
+        fields = (
+            "username",
+            "first_name",
+            "last_name",
+            "email",
+            "role",
+            "is_active",
+            "password",
+        )
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["role"].choices = [
+            ("manager", "Manager"),
+            ("cashier", "Cashier"),
+        ]
+
+    def clean_role(self):
+        role = (self.cleaned_data.get("role") or "").strip().lower()
+        allowed = ["manager", "cashier"]
+        if role not in allowed:
+            raise forms.ValidationError("Role harus manager atau cashier.")
+        return role
+    
+
+class ShopStaffInline(admin.TabularInline):
+    model = ShopStaffUser
+    form = ShopStaffInlineForm
+    extra = 0
+    fk_name = "shop"
+
+    fields = (
+        "username",
+        "first_name",
+        "last_name",
+        "email",
+        "role",
+        "is_active",
+    )
+
+    verbose_name = "Shop Staff"
+    verbose_name_plural = "Shop Staff"
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(shop__isnull=False, is_superuser=False).exclude(role="owner")
+        
+        
+# ==========================================================
+# SHOP ADMIN
+# ==========================================================
+
+@admin.register(Shop)
+class ShopAdmin(admin.ModelAdmin):
+    form = ShopAdminForm
+    inlines = [ShopStaffInline]
+
+    list_display = (
+        "id",
+        "name",
+        "code",
+        "slug",
+        "business_type",
+        "owner_display",
+        "staff_count",
+        "add_staff_link",
+        "subdomain_display",
+        "custom_domain_display",
+        "is_active",
+    )
+    search_fields = ("name", "code", "slug", "email", "phone")
+    list_filter = ("business_type", "is_active")
+    readonly_fields = ("owner", "created_at")
+
+    def owner_display(self, obj):
+        if getattr(obj, "owner", None):
+            return obj.owner.username
+        return "-"
+    owner_display.short_description = "Owner"
+
+    def staff_count(self, obj):
+        return obj.users.exclude(role="owner").count()
+
+    def add_staff_link(self, obj):
+        url = reverse("admin:pos_shopstaffuser_add")
+        query = urlencode({"shop": obj.id})
+        return format_html('<a class="button" href="{}?{}">Add Staff</a>', url, query)
+    add_staff_link.short_description = "Add Staff"
+
+    def subdomain_display(self, obj):
+        return getattr(obj, "subdomain", "") or "-"
+    subdomain_display.short_description = "Subdomain"
+
+    def custom_domain_display(self, obj):
+        return getattr(obj, "custom_domain", "") or "-"
+    custom_domain_display.short_description = "Custom domain"
+
+    def _shop_model_fields(self):
+        return {f.name for f in self.model._meta.get_fields()}
+
+    def _existing_fields(self, *field_names):
+        existing = self._shop_model_fields()
+        return tuple(field for field in field_names if field in existing)
+
+    def get_fieldsets(self, request, obj=None):
+        fieldsets = []
+
+        basic_info = self._existing_fields(
+            "name",
+            "code",
+            "slug",
+            "business_type",
+            "is_active"
+        )
+        if basic_info:
+            fieldsets.append(("Basic Info", {"fields": basic_info}))
+
+        contact = self._existing_fields("phone", "email", "address")
+        if contact:
+            fieldsets.append(("Contact", {"fields": contact}))
+
+        owner_fields = []
+        if "owner" in self._shop_model_fields():
+            owner_fields.append("owner")
+
+        owner_fields += [
+            "owner_full_name",
+            "owner_username",
+            "owner_email",
+            "owner_password1",
+            "owner_password2",
+            "provision_defaults",
+        ]
+
+        fieldsets.append(("Primary Owner", {"fields": tuple(owner_fields)}))
+
+        domain_fields = self._existing_fields(
+            "subdomain",
+            "custom_domain",
+            "frontend_url",
+            "backend_url",
+        )
+        if domain_fields:
+            fieldsets.append(("Domain / URL Config", {"fields": domain_fields}))
+
+        notes_fields = self._existing_fields("notes")
+        if notes_fields:
+            fieldsets.append(("Notes", {"fields": notes_fields}))
+
+        system_fields = self._existing_fields("created_at")
+        if system_fields:
+            fieldsets.append(("System Info", {"fields": system_fields}))
+
+        return fieldsets
+
+    @transaction.atomic
+    def save_model(self, request, obj, form, change):
+        is_new = obj.pk is None
+
+        super().save_model(request, obj, form, change)
+
+        provision_defaults = form.cleaned_data.get("provision_defaults", True)
+
+        if is_new and provision_defaults:
+            result = ShopProvisionService.provision(
+                shop=obj,
+                owner_username=form.cleaned_data["owner_username"],
+                owner_email=form.cleaned_data.get("owner_email", ""),
+                owner_password=form.cleaned_data["owner_password1"],
+                owner_full_name=form.cleaned_data.get("owner_full_name", ""),
+                created_by=request.user,
+            )
+
+            owner = result["owner"]
+            self.message_user(
+                request,
+                f"Shop '{obj.name}' berhasil dibuat dan diprovision. Owner: {owner.username}",
+                level=messages.SUCCESS,
+            )
+
+        elif change:
+            password1 = form.cleaned_data.get("owner_password1")
+            password2 = form.cleaned_data.get("owner_password2")
+
+            if password1 and password2 and password1 == password2 and getattr(obj, "owner", None):
+                obj.owner.set_password(password1)
+                obj.owner.save(update_fields=["password"])
+                self.message_user(
+                    request,
+                    f"Password owner untuk shop '{obj.name}' berhasil diperbarui.",
+                    level=messages.SUCCESS,
+                )
+
+
+# ==========================================================
+# USER ADMIN
+# ==========================================================
+
+@admin.register(PlatformUser)
+class PlatformUserAdmin(UserAdmin):
     fieldsets = (
-        ("Login Info", {"fields": ("username", "password")}),
-        ("Personal Info", {"fields": ("first_name", "last_name", "email")}),
-        ("Role Settings", {"fields": ("role",)}),
-        ("System Info", {"fields": ("is_active", "last_login", "date_joined")}),
+        ("Login", {"fields": ("username", "password")}),
+        ("Personal", {"fields": ("first_name", "last_name", "email")}),
+        ("Platform Access", {"fields": ("is_active", "is_superuser")}),
+        ("Permissions", {"fields": ("groups", "user_permissions")}),
+        ("System", {"fields": ("last_login", "date_joined")}),
     )
 
     add_fieldsets = (
-        ("Create User", {
+        ("Create Platform User", {
             "classes": ("wide",),
-            "fields": ("username", "email", "password1", "password2", "role", "is_active"),
+            "fields": (
+                "username",
+                "email",
+                "password1",
+                "password2",
+                "is_active",
+                "is_superuser",
+            ),
         }),
     )
 
-    list_display = ("username", "email", "role", "is_active")
-    list_filter = ("role", "is_active")
-    search_fields = ("username", "email")
-    ordering = ("username",)
+    list_display = (
+        "username",
+        "email",
+        "is_superuser",
+        "is_active",
+    )
 
-    # Remove permissions UI completely
-    filter_horizontal = ()
+    list_filter = (
+        "is_superuser",
+        "is_active",
+    )
+
+    search_fields = (
+        "username",
+        "email",
+    )
+
+    ordering = ("username",)
     readonly_fields = ("last_login", "date_joined")
 
-    def get_form(self, request, obj=None, **kwargs):
-        form = super().get_form(request, obj, **kwargs)
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(is_superuser=True)
 
-        # Prevent accidental self-demotion (optional but safe)
-        if obj and obj.pk == request.user.pk:
-            if "role" in form.base_fields:
-                form.base_fields["role"].disabled = True
+    def save_model(self, request, obj, form, change):
+        obj.shop = None
+        obj.is_superuser = True
+        super().save_model(request, obj, form, change)
+    
 
-        return form
+@admin.register(ShopStaffUser)
+class ShopStaffUserAdmin(UserAdmin):
+
+    fieldsets = (
+        ("Login", {"fields": ("username", "password")}),
+        ("Personal", {"fields": ("first_name", "last_name", "email")}),
+        ("Shop Role", {"fields": ("shop", "role", "is_active")}),
+        ("System", {"fields": ("last_login", "date_joined")}),
+    )
+
+    add_fieldsets = (
+        ("Create Shop Staff", {
+            "classes": ("wide",),
+            "fields": (
+                "username",
+                "email",
+                "password1",
+                "password2",
+                "shop",
+                "role",
+                "is_active",
+            ),
+        }),
+    )
+
+    list_display = (
+        "username",
+        "shop",
+        "email",
+        "role",
+        "is_active",
+    )
+
+    list_filter = (
+        "shop",
+        "role",
+        "is_active",
+    )
+
+    search_fields = (
+        "username",
+        "email",
+        "shop__name",
+        "shop__code",
+    )
+
+    ordering = ("shop", "username")
+
+    readonly_fields = (
+        "last_login",
+        "date_joined"
+    )
+
+    def has_module_permission(self, request):
+        # HILANGKAN DARI SIDEBAR
+        return False
+
+    def get_queryset(self, request):
+        qs = super().get_queryset(request)
+        return qs.filter(shop__isnull=False, is_superuser=False)
+
+    def get_changeform_initial_data(self, request):
+        initial = super().get_changeform_initial_data(request)
+
+        shop_id = request.GET.get("shop")
+
+        if shop_id:
+            initial["shop"] = shop_id
+
+        return initial
+
+    def save_model(self, request, obj, form, change):
+
+        if not obj.shop_id:
+            raise ValueError("Shop wajib diisi.")
+
+        obj.is_superuser = False
+        obj.is_staff = False
+
+        super().save_model(request, obj, form, change)
+        
+
+# ==========================================================
+# BANNER
+# ==========================================================
+
+@admin.register(Banner)
+class BannerAdmin(admin.ModelAdmin):
+
+    list_display=("title","active")
+
+
+# ==========================================================
+# SHIFT
+# ==========================================================
 
 @admin.register(Shift)
 class ShiftAdmin(admin.ModelAdmin):
-    list_display = ("id", "shop", "cashier", "status", "opened_at", "closed_at", "opening_cash", "closing_cash", "expected_cash", "cash_difference")
-    list_filter = ("status", "shop", "opened_at")
-    search_fields = ("cashier__username", "cashier__email")
 
-# @admin.register(TokenProxy)
-# class TokenProxyAdmin(admin.ModelAdmin):
-#     list_display = ("key", "user", "created")
-#     search_fields = ("key", "user__username", "user__email")
-#     ordering = ("-created",)
+    list_display=(
+
+        "id",
+        "shop",
+        "cashier",
+        "status",
+        "opened_at"
+
+    )

@@ -102,8 +102,13 @@ class PurchaseCreateSerializer(serializers.Serializer):
     def validate_supplier(self, v):
         if v is None:
             return None
-        if not Supplier.objects.filter(pk=v).exists():
-            raise serializers.ValidationError("Supplier not found")
+
+        request = self.context.get("request")
+        shop = getattr(getattr(request, "user", None), "shop", None)
+
+        if not Supplier.objects.filter(pk=v, shop=shop).exists():
+            raise serializers.ValidationError("Supplier not found in your shop")
+
         return v
 
     @transaction.atomic
@@ -111,11 +116,14 @@ class PurchaseCreateSerializer(serializers.Serializer):
         request = self.context.get("request")
         user = getattr(request, "user", None)
 
+        shop = validated_data.get("shop")
+        created_by = validated_data.get("created_by") or (user if user and user.is_authenticated else None)
+
         supplier_id = validated_data.get("supplier", None)
         invoice_id = (validated_data.get("invoice_id") or "").strip()
         note = (validated_data.get("note") or "").strip()
 
-        purchase_date = validated_data.get("purchase_date")  # date or None
+        purchase_date = validated_data.get("purchase_date")
         pd = purchase_date or timezone.localdate()
 
         items_in = validated_data.get("items") or []
@@ -123,23 +131,23 @@ class PurchaseCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError({"items": "At least 1 item is required"})
 
         purchase = Purchase.objects.create(
+            shop=shop,
             supplier_id=supplier_id,
             invoice_id=invoice_id,
             note=note,
-            created_by=user if user and user.is_authenticated else None,
+            created_by=created_by,
             purchase_date=pd,
         )
 
-        # Merge same product + expired + cost
         merged = {}
         for it in items_in:
             pid = int(it["product"])
-            exp = it.get("expired_date", None)  # date or None
+            exp = it.get("expired_date", None)
             cost = it["cost_price"]
             qty = int(it["quantity"])
 
-            if not Product.objects.filter(pk=pid).exists():
-                raise serializers.ValidationError({"items": f"Product {pid} not found"})
+            if not Product.objects.filter(pk=pid, shop=shop).exists():
+                raise serializers.ValidationError({"items": f"Product {pid} not found in your shop"})
 
             key = (pid, exp, str(cost))
             merged.setdefault(
@@ -148,12 +156,14 @@ class PurchaseCreateSerializer(serializers.Serializer):
             )
             merged[key]["quantity"] += qty
 
-        # Create items + update stock + movement
         for _, row in merged.items():
-            product = Product.objects.select_for_update().get(pk=row["product_id"])
+            product = Product.objects.select_for_update().get(
+                pk=row["product_id"],
+                shop=shop
+            )
 
             before = int(product.stock or 0)
-            delta = int(row["quantity"])  # IN
+            delta = int(row["quantity"])
             after = before + delta
 
             PurchaseItem.objects.create(
@@ -168,6 +178,7 @@ class PurchaseCreateSerializer(serializers.Serializer):
             product.save(update_fields=["stock"])
 
             StockMovement.objects.create(
+                shop=shop,
                 product=product,
                 movement_type=StockMovement.Type.PURCHASE,
                 quantity_delta=delta,

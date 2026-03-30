@@ -13,7 +13,11 @@ from .serializers_purchases import (
 
 def _role_ok(user):
     r = (getattr(user, "role", "") or "").lower().strip()
-    return r in ["admin", "manager"] or getattr(user, "is_superuser", False)
+    return r in ["owner", "manager"] or getattr(user, "is_superuser", False)
+
+
+def _user_shop(user):
+    return getattr(user, "shop", None)
 
 
 @api_view(["GET", "POST"])
@@ -29,6 +33,14 @@ def purchases_list_create(request):
             .prefetch_related("items", "items__product")
             .all()
         )
+
+        if request.user.is_superuser:
+            pass
+        else:
+            if not _user_shop(request.user):
+                return Response({"detail": "No shop assigned."}, status=status.HTTP_400_BAD_REQUEST)
+            qs = qs.filter(shop=_user_shop(request.user))
+
         ser = PurchaseListSerializer(qs, many=True)
         return Response(ser.data)
 
@@ -43,8 +55,7 @@ def purchases_list_create(request):
         .get(pk=p.pk)
     )
 
-    out = PurchaseDetailSerializer(p).data
-    return Response(out, status=status.HTTP_201_CREATED)
+    return Response(PurchaseDetailSerializer(p).data, status=status.HTTP_201_CREATED)
 
 
 @api_view(["GET"])
@@ -53,13 +64,22 @@ def purchases_detail(request, pk: int):
     if not _role_ok(request.user):
         return Response({"detail": "Forbidden"}, status=status.HTTP_403_FORBIDDEN)
 
+    qs = (
+        Purchase.objects
+        .select_related("supplier")
+        .prefetch_related("items", "items__product")
+        .all()
+    )
+
+    if request.user.is_superuser:
+        pass
+    else:
+        if not _user_shop(request.user):
+            return Response({"detail": "No shop assigned."}, status=status.HTTP_400_BAD_REQUEST)
+        qs = qs.filter(shop=_user_shop(request.user))
+
     try:
-        p = (
-            Purchase.objects
-            .select_related("supplier")
-            .prefetch_related("items", "items__product")
-            .get(pk=pk)
-        )
+        p = qs.get(pk=pk)
     except Purchase.DoesNotExist:
         return Response({"detail": "Not found"}, status=status.HTTP_404_NOT_FOUND)
 

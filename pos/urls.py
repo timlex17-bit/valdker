@@ -1,5 +1,4 @@
 from django.urls import path, include
-from .views_purchases import purchases_list_create, purchases_detail
 from pos.views_shift import shifts_list, shifts_open, shifts_close
 from rest_framework.routers import DefaultRouter
 
@@ -8,23 +7,36 @@ from .views import (
     OrderViewSet, BannerViewSet, CustomerViewSet, SupplierViewSet,
     ProductViewSet, CategoryViewSet, UnitViewSet, ShopViewSet,
     ExpenseViewSet, DailyProfitReportAPIView, MonthlyPLReportAPIView,
+    MyShopAPIView,
 
     StockAdjustmentViewSet,
     InventoryCountViewSet,
     ProductReturnViewSet,
     StockMovementViewSet,
+
+    PaymentMethodViewSet,
+    BankAccountViewSet,
+    SalePaymentViewSet,
+    BankLedgerViewSet,
+    PurchaseViewSet
 )
 
 router = DefaultRouter()
-router.register(r"customers", CustomerViewSet)
-router.register(r"suppliers", SupplierViewSet)
-router.register(r"products", ProductViewSet)
-router.register(r"categories", CategoryViewSet)
-router.register(r"banners", BannerViewSet)
-router.register(r"units", UnitViewSet)
-router.register(r"orders", OrderViewSet)
-router.register(r"shops", ShopViewSet)
-router.register(r"expenses", ExpenseViewSet)
+router.register(r"customers", CustomerViewSet, basename="customer")
+router.register(r"suppliers", SupplierViewSet, basename="supplier")
+router.register(r"products", ProductViewSet, basename="product")
+router.register(r"purchases", PurchaseViewSet, basename="purchases")
+router.register(r"categories", CategoryViewSet, basename="category")
+router.register(r"banners", BannerViewSet, basename="banner")
+router.register(r"units", UnitViewSet, basename="unit")
+router.register(r"orders", OrderViewSet, basename="order")
+router.register(r"shops", ShopViewSet, basename="shop")
+router.register(r"expenses", ExpenseViewSet, basename="expense")
+
+router.register(r"payment-methods", PaymentMethodViewSet, basename="payment-methods")
+router.register(r"bank-accounts", BankAccountViewSet, basename="bank-accounts")
+router.register(r"sale-payments", SalePaymentViewSet, basename="sale-payments")
+router.register(r"bank-ledgers", BankLedgerViewSet, basename="bank-ledgers")
 
 router.register(r"stockadjustments", StockAdjustmentViewSet, basename="stockadjustments")
 router.register(r"inventorycounts", InventoryCountViewSet, basename="inventorycounts")
@@ -34,7 +46,9 @@ router.register(r"stockmovements", StockMovementViewSet, basename="stockmovement
 urlpatterns = [
     path("auth/login/", views.api_login, name="api_login"),
     path("auth/login", views.api_login, name="api_login_noslash"),
-    
+
+    path("shop/me/", MyShopAPIView.as_view(), name="my_shop"),
+
     path("shifts/", shifts_list, name="shifts_list"),
     path("shifts/open/", shifts_open, name="shifts_open"),
     path("shifts/<int:pk>/close/", shifts_close, name="shifts_close"),
@@ -42,15 +56,15 @@ urlpatterns = [
     path("reports/daily-profit/", DailyProfitReportAPIView.as_view(), name="api_daily_profit"),
     path("reports/monthly-pl/", MonthlyPLReportAPIView.as_view(), name="api_monthly_pl"),
     path("reports/net-income-today/", views.net_income_today, name="net_income_today"),
-    
-    path("purchases/", purchases_list_create, name="purchases_list_create"),
-    path("purchases/<int:pk>/", purchases_detail, name="purchases_detail"),
+
+    path("owner/", include("pos.api_owner_chat.urls")),
 
     path("products/print-barcodes/", views.api_print_barcodes, name="api_print_barcodes"),
+    
+    path("", include("pos.urls_backup")),
+    
+    path("", include("pos.urls_import")),
 
-    # ✅ IMPORTANT: include shift + finance endpoints
     path("", include("pos.api.urls")),
-
-    # DRF router endpoints
     path("", include(router.urls)),
 ]

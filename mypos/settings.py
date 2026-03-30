@@ -37,18 +37,23 @@ ALLOWED_HOSTS = [
     "192.168.1.102",
     "192.168.1.197",
     "valdker.onrender.com",
+    "api.valdker.web.id",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://192.168.1.197:5173",
     "http://192.168.1.197:8000",
     "https://valdker-vue-js.vercel.app",
     "https://valdker.onrender.com",
+    "https://app.valdker.web.id",
+    "https://api.valdker.web.id",
 ]
 
-SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 
 if DEBUG:
     SESSION_COOKIE_SECURE = False
@@ -56,9 +61,9 @@ if DEBUG:
 else:
     SESSION_COOKIE_SECURE = True
     CSRF_COOKIE_SECURE = True
-    
+
 CSRF_COOKIE_SAMESITE = "Lax"
-SESSION_COOKIE_SAMESITE = "Lax"    
+SESSION_COOKIE_SAMESITE = "Lax" 
 
 # --------------------------------------------------
 # Applications
@@ -66,6 +71,8 @@ SESSION_COOKIE_SAMESITE = "Lax"
 INSTALLED_APPS = [
     "jazzmin",
     "pos",
+    
+    "drf_spectacular",
 
     # Cloudinary
     "cloudinary",
@@ -90,12 +97,20 @@ INSTALLED_APPS = [
 # DRF settings (Token Auth)
 # --------------------------------------------------
 REST_FRAMEWORK = {
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_AUTHENTICATION_CLASSES": [
         "rest_framework.authentication.TokenAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+}
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "ValdkerPOS API",
+    "DESCRIPTION": "API documentation for ValdkerPOS backend",
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
 }
 
 # --------------------------------------------------
@@ -124,15 +139,16 @@ AUTH_USER_MODEL = "pos.CustomUser"
 # CORS configuration
 # --------------------------------------------------
 CORS_ALLOW_ALL_ORIGINS = False
-
 CORS_ALLOWED_ORIGINS = [
     "https://valdker-vue-js.vercel.app",
     "http://localhost:5173",
     "http://127.0.0.1:5173",
+    "http://localhost:5174",
+    "http://127.0.0.1:5174",
     "http://192.168.1.197:5173",
+    "https://app.valdker.web.id",
 ]
 
-# Allow any Vercel preview subdomain
 CORS_ALLOWED_ORIGIN_REGEXES = [
     r"^https:\/\/.*\.vercel\.app$",
 ]
@@ -140,6 +156,9 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 CORS_ALLOW_METHODS = ["DELETE", "GET", "OPTIONS", "PATCH", "POST", "PUT"]
 CORS_ALLOW_HEADERS = list(default_headers) + ["authorization"]
 CORS_ALLOW_CREDENTIALS = False
+
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_HELP_MODEL = os.environ.get("OPENAI_HELP_MODEL", "gpt-5-mini")
 
 # --------------------------------------------------
 # Database
