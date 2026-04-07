@@ -1438,7 +1438,6 @@ class StaffSerializer(serializers.ModelSerializer):
         attrs["last_name"] = last_name
         attrs["role"] = role
 
-        # Owner shop hanya boleh kelola user di shop sendiri
         qs = User.objects.filter(username__iexact=username)
         if not user.is_superuser:
             qs = qs.filter(shop=shop)
@@ -1451,7 +1450,6 @@ class StaffSerializer(serializers.ModelSerializer):
                 "username": "Username already exists in this shop."
             })
 
-        # Optional: email unique per shop bila diisi
         if email:
             email_qs = User.objects.filter(email__iexact=email)
             if not user.is_superuser:
@@ -1474,13 +1472,10 @@ class StaffSerializer(serializers.ModelSerializer):
         return attrs
 
     def create(self, validated_data):
-        shop = require_tenant_shop(self.context)
-
         password = validated_data.pop("password", None)
 
         user = User(
             **validated_data,
-            shop=shop,
             is_staff=False,
             is_superuser=False,
         )
@@ -1501,7 +1496,6 @@ class StaffSerializer(serializers.ModelSerializer):
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
 
-        # cegah shop dipindah lewat endpoint ini
         if hasattr(instance, "shop_id"):
             shop = require_tenant_shop(self.context)
             instance.shop = shop

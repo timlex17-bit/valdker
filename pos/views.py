@@ -1789,38 +1789,26 @@ class StaffViewSet(RequestContextMixin, viewsets.ModelViewSet):
         return qs
 
     def perform_create(self, serializer):
-        if self.request.user.is_superuser:
-            # superuser boleh buat staff tenant jika dirinya sudah punya shop context?
-            # karena endpoint ini konsepnya shop-scoped, tetap lebih aman wajib shop context
-            shop = _user_shop(self.request)
-            if not shop:
-                raise ValidationError("Superuser must have shop context to create staff from this endpoint.")
-            serializer.save()
-            return
-
         shop = _require_user_shop(self.request)
         serializer.save(shop=shop)
 
     def perform_update(self, serializer):
         instance = self.get_object()
+        shop = _require_user_shop(self.request)
 
-        if not self.request.user.is_superuser:
-            shop = _require_user_shop(self.request)
-            if instance.shop_id != shop.id:
-                raise ValidationError("Staff ini tidak berasal dari shop Anda.")
+        if instance.shop_id != shop.id:
+            raise ValidationError("Staff ini tidak berasal dari shop Anda.")
 
         serializer.save()
 
     def perform_destroy(self, instance):
         user = self.request.user
+        shop = _require_user_shop(self.request)
 
-        if not user.is_superuser:
-            shop = _require_user_shop(self.request)
-            if instance.shop_id != shop.id:
-                raise ValidationError("Staff ini tidak berasal dari shop Anda.")
+        if instance.shop_id != shop.id:
+            raise ValidationError("Staff ini tidak berasal dari shop Anda.")
 
-            # owner tidak boleh hapus dirinya sendiri
-            if instance.id == user.id:
-                raise ValidationError("Anda tidak bisa menghapus akun Anda sendiri.")
+        if instance.id == user.id:
+            raise ValidationError("Anda tidak bisa menghapus akun Anda sendiri.")
 
-        instance.delete()        
+        instance.delete()
