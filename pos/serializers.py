@@ -32,6 +32,16 @@ def _abs_or_raw(request, url: str | None) -> str | None:
         return request.build_absolute_uri(url)
     return url
 
+def _normalize_media_url(request, field_file):
+    if not field_file:
+        return None
+    try:
+        url = field_file.url
+        if request and url.startswith("/"):
+            return request.build_absolute_uri(url)
+        return url
+    except Exception:
+        return None
 
 def _request_user(context):
     request = context.get("request")
@@ -219,13 +229,7 @@ class CategorySerializer(serializers.ModelSerializer):
 
     def get_icon_url(self, obj):
         request = self.context.get("request")
-        try:
-            if not obj.icon:
-                return ""
-            url = _force_https(obj.icon.url)
-            return _abs_or_raw(request, url) or ""
-        except Exception:
-            return ""
+        return _normalize_media_url(request, obj.icon) or ""
 
     def create(self, validated_data):
         shop = require_tenant_shop(self.context)
@@ -340,13 +344,7 @@ class ProductSerializer(serializers.ModelSerializer):
 
     def get_image_url(self, obj):
         request = self.context.get("request")
-        try:
-            if not obj.image:
-                return None
-            url = _force_https(obj.image.url)
-            return _abs_or_raw(request, url)
-        except Exception:
-            return None
+        return _normalize_media_url(request, obj.image)
 
     def validate(self, attrs):
         shop = require_tenant_shop(self.context)
@@ -1221,14 +1219,7 @@ class BannerSerializer(serializers.ModelSerializer):
 
     def get_image_url(self, obj):
         request = self.context.get("request")
-        try:
-            if not obj.image:
-                return None
-            url = _force_https(obj.image.url)
-            return _abs_or_raw(request, url)
-        except Exception:
-            return None
-        
+        return _normalize_media_url(request, obj.image)
 
 class ShopFeatureSerializer(serializers.ModelSerializer):
     class Meta:
@@ -1284,23 +1275,11 @@ class ShopSerializer(serializers.ModelSerializer):
 
     def get_logo_url(self, obj):
         request = self.context.get("request")
-        try:
-            if not obj.logo:
-                return ""
-            url = _force_https(obj.logo.url)
-            return _abs_or_raw(request, url) or ""
-        except Exception:
-            return ""
+        return _normalize_media_url(request, obj.logo) or ""
 
     def get_all_category_icon_url(self, obj):
         request = self.context.get("request")
-        try:
-            if not obj.all_category_icon:
-                return ""
-            url = _force_https(obj.all_category_icon.url)
-            return _abs_or_raw(request, url) or ""
-        except Exception:
-            return ""
+        return _normalize_media_url(request, obj.all_category_icon) or ""
 
     def validate(self, attrs):
         require_tenant_shop(self.context)

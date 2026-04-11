@@ -178,21 +178,16 @@ class ImportJobValidateAPIView(APIView):
 
         try:
             result = validate_import_workbook(obj)
-            serializer = ImportValidateResponseSerializer({
-                "import_job_id": result["import_job_id"],
-                "total_rows": result["total_rows"],
-                "valid_rows": result["valid_rows"],
-                "invalid_rows": result["invalid_rows"],
-                "errors": result["errors"],
-            })
-            return Response(serializer.data)
+            return Response(result)
         except Exception as e:
+            import traceback
+            traceback.print_exc()
+
             obj.mark_failed(str(e))
             return Response(
                 {"message": "Validation failed.", "error": str(e)},
                 status=500,
             )
-
 
 class ImportJobConfirmAPIView(APIView):
     authentication_classes = [TokenAuthentication, SessionAuthentication]

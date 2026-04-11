@@ -1,12 +1,15 @@
-# pos/services/backup_service.py
-
 import json
 import hashlib
 import tempfile
 import zipfile
+from decimal import Decimal
+from datetime import date, datetime, time
 from pathlib import Path
+from urllib.request import urlopen, Request
+from urllib.parse import urlparse
 
 from django.conf import settings
+from django.db.models.fields.files import FileField
 from django.utils import timezone
 
 from pos.models import (
@@ -60,8 +63,12 @@ def ensure_backup_setting(shop: Shop) -> BackupSetting:
 def backup_root() -> Path:
     root = getattr(settings, "BACKUP_ROOT", None)
     if root:
-        return Path(root)
-    return Path(settings.MEDIA_ROOT) / "backups"
+        path = Path(root)
+    else:
+        path = Path(settings.MEDIA_ROOT) / "backups"
+
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def shop_backup_dir(shop: Shop) -> Path:
@@ -105,26 +112,310 @@ def compute_sha256(file_path: Path) -> str:
 
 
 # =========================================================
-# SERIALIZATION HELPERS
+# JSON / SERIALIZATION HELPERS
 # =========================================================
+def normalize_json_value(value):
+    """
+    Ubah value yang tidak langsung JSON serializable menjadi aman:
+    - Decimal -> string
+    - datetime/date/time -> isoformat
+    - Path -> string
+    Sisanya dikembalikan apa adanya.
+    """
+    if value is None:
+        return None
+
+    if isinstance(value, Decimal):
+        return str(value)
+
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+
+    if isinstance(value, Path):
+        return str(value)
+
+    return value
+
+
+def deep_normalize_json(value):
+    """
+    Recursive sanitizer untuk payload dict/list besar sebelum json.dump
+    agar aman dari Decimal atau object non-serializable lain.
+    """
+    if isinstance(value, dict):
+        return {k: deep_normalize_json(v) for k, v in value.items()}
+
+    if isinstance(value, list):
+        return [deep_normalize_json(v) for v in value]
+
+    if isinstance(value, tuple):
+        return [deep_normalize_json(v) for v in value]
+
+    return normalize_json_value(value)
+
+
 def serialize_queryset(qs, fields):
     rows = []
     for obj in qs:
         item = {}
         for field in fields:
             value = getattr(obj, field, None)
-
-            if hasattr(value, "isoformat"):
-                try:
-                    value = value.isoformat()
-                except Exception:
-                    pass
-
-            item[field] = value
+            item[field] = normalize_json_value(value)
         rows.append(item)
     return rows
 
 
+# =========================================================
+# MEDIA EXPORT HELPERS
+# =========================================================
+def get_file_field_names(model_cls):
+    """
+    Cari semua FileField/ImageField secara dinamis.
+    ImageField adalah subclass dari FileField, jadi cukup cek FileField.
+    """
+    names = []
+    for field in model_cls._meta.get_fields():
+        if isinstance(field, FileField):
+            names.append(field.name)
+    return names
+
+
+def iter_media_source_querysets(shop: Shop, setting: BackupSetting):
+    """
+    Queryset object yang mungkin punya file/image field.
+    Pendekatan ini aman karena:
+    - hanya object milik tenant/shop terkait
+    - model tanpa FileField akan otomatis dilewati
+    """
+    sources = [
+        Shop.objects.filter(pk=shop.pk),
+        Customer.objects.filter(shop=shop),
+        Supplier.objects.filter(shop=shop),
+        Category.objects.filter(shop=shop),
+        Unit.objects.filter(shop=shop),
+        Product.objects.filter(shop=shop),
+        Purchase.objects.filter(shop=shop),
+        PurchaseItem.objects.filter(purchase__shop=shop),
+        Order.objects.filter(shop=shop),
+        OrderItem.objects.filter(order__shop=shop),
+        Expense.objects.filter(shop=shop),
+        PaymentMethod.objects.filter(shop=shop),
+        BankAccount.objects.filter(shop=shop),
+        SalePayment.objects.filter(order__shop=shop),
+        BankLedger.objects.filter(bank_account__shop=shop),
+        StockMovement.objects.filter(shop=shop),
+        StockAdjustment.objects.filter(shop=shop),
+        InventoryCount.objects.filter(shop=shop),
+        InventoryCountItem.objects.filter(inventory__shop=shop),
+        ProductReturn.objects.filter(shop=shop),
+        ProductReturnItem.objects.filter(product_return__shop=shop),
+        Banner.objects.filter(shop=shop),
+    ]
+
+    if setting.include_users:
+        sources.append(CustomUser.objects.filter(shop=shop))
+
+    return sources
+
+
+def _safe_remote_filename(file_name: str, fallback_name: str = "file.bin") -> str:
+    name = (file_name or "").strip().replace("\\", "/").split("/")[-1]
+    return name or fallback_name
+
+
+def _download_remote_file_bytes(url: str, timeout: int = 20):
+    req = Request(url, headers={"User-Agent": "ValdKerPOS-Backup/1.0"})
+    with urlopen(req, timeout=timeout) as resp:
+        content = resp.read()
+        content_type = resp.headers.get_content_type() if resp.headers else None
+    return content, content_type
+
+
+def collect_media_files(shop: Shop, setting: BackupSetting):
+    """
+    Kumpulkan file media yang terkait dengan shop.
+
+    Mendukung 2 sumber:
+    1. Local filesystem storage -> ambil dari file_attr.path
+    2. Remote storage (mis. Cloudinary) -> ambil dari file_attr.url lalu download bytes
+
+    Tidak melempar exception untuk file rusak/hilang; cukup skip dan catat.
+    """
+    collected = []
+    skipped = []
+    seen_zip_paths = set()
+    seen_abs_paths = set()
+
+    media_root = Path(settings.MEDIA_ROOT)
+
+    for qs in iter_media_source_querysets(shop, setting):
+        model_cls = qs.model
+        file_fields = get_file_field_names(model_cls)
+        if not file_fields:
+            continue
+
+        for obj in qs.iterator():
+            model_label = obj._meta.model_name
+            object_id = getattr(obj, "pk", None)
+
+            for field_name in file_fields:
+                try:
+                    file_attr = getattr(obj, field_name, None)
+                    if not file_attr:
+                        continue
+
+                    file_name = getattr(file_attr, "name", "") or ""
+                    if not file_name:
+                        continue
+
+                    # -----------------------------------------
+                    # 1) Coba file lokal via .path
+                    # -----------------------------------------
+                    abs_path = None
+                    try:
+                        abs_path = Path(file_attr.path)
+                    except Exception:
+                        abs_path = None
+
+                    if abs_path and abs_path.exists() and abs_path.is_file():
+                        abs_key = str(abs_path.resolve())
+                        if abs_key in seen_abs_paths:
+                            continue
+
+                        try:
+                            rel_to_media = abs_path.relative_to(media_root)
+                            zip_path = f"media/{str(rel_to_media).replace('\\', '/')}"
+                        except ValueError:
+                            zip_path = (
+                                f"media/_external/{model_label}/{object_id}/"
+                                f"{field_name}_{abs_path.name}"
+                            ).replace("\\", "/")
+
+                        if zip_path in seen_zip_paths:
+                            continue
+
+                        seen_abs_paths.add(abs_key)
+                        seen_zip_paths.add(zip_path)
+
+                        collected.append({
+                            "source_type": "local",
+                            "abs_path": abs_path,
+                            "zip_path": zip_path,
+                            "model": model_label,
+                            "object_id": object_id,
+                            "field": field_name,
+                            "file_name": file_name,
+                            "size_bytes": abs_path.stat().st_size,
+                        })
+                        continue
+
+                    # -----------------------------------------
+                    # 2) Fallback remote via .url (Cloudinary, dst)
+                    # -----------------------------------------
+                    remote_url = ""
+                    try:
+                        remote_url = getattr(file_attr, "url", "") or ""
+                    except Exception:
+                        remote_url = ""
+
+                    if remote_url:
+                        parsed = urlparse(remote_url)
+                        remote_name = _safe_remote_filename(
+                            file_name or parsed.path.split("/")[-1],
+                            "remote_file"
+                        )
+
+                        zip_path = (
+                            f"media/remote/{model_label}/{object_id}/"
+                            f"{field_name}_{remote_name}"
+                        ).replace("\\", "/")
+
+                        if zip_path in seen_zip_paths:
+                            continue
+
+                        try:
+                            content, content_type = _download_remote_file_bytes(remote_url)
+                            size_bytes = len(content)
+
+                            seen_zip_paths.add(zip_path)
+
+                            collected.append({
+                                "source_type": "remote",
+                                "content": content,
+                                "content_type": content_type,
+                                "remote_url": remote_url,
+                                "zip_path": zip_path,
+                                "model": model_label,
+                                "object_id": object_id,
+                                "field": field_name,
+                                "file_name": remote_name,
+                                "size_bytes": size_bytes,
+                            })
+                            continue
+                        except Exception as e:
+                            skipped.append({
+                                "model": model_label,
+                                "object_id": object_id,
+                                "field": field_name,
+                                "file_name": file_name,
+                                "reason": f"remote download failed: {str(e)}",
+                            })
+                            continue
+
+                    skipped.append({
+                        "model": model_label,
+                        "object_id": object_id,
+                        "field": field_name,
+                        "file_name": file_name,
+                        "reason": "file path and remote url unavailable",
+                    })
+
+                except Exception as e:
+                    skipped.append({
+                        "model": model_label,
+                        "object_id": object_id,
+                        "field": field_name,
+                        "file_name": "",
+                        "reason": str(e),
+                    })
+
+    return {
+        "files": collected,
+        "skipped": skipped,
+    }
+
+
+def build_media_export_summary(media_result: dict) -> dict:
+    files = media_result.get("files", []) or []
+    skipped = media_result.get("skipped", []) or []
+
+    total_bytes = sum(int(item.get("size_bytes") or 0) for item in files)
+
+    return {
+        "exported_count": len(files),
+        "skipped_count": len(skipped),
+        "total_size_bytes": total_bytes,
+        "total_size_label": format_file_size(total_bytes),
+        "exported_files": [
+            {
+                "zip_path": item["zip_path"],
+                "model": item["model"],
+                "object_id": item["object_id"],
+                "field": item["field"],
+                "file_name": item["file_name"],
+                "size_bytes": item["size_bytes"],
+                "source_type": item.get("source_type", "unknown"),
+                "remote_url": item.get("remote_url", ""),
+            }
+            for item in files
+        ],
+        "skipped_files": skipped[:50],  # batasi agar metadata tidak terlalu besar
+    }
+
+
+# =========================================================
+# PAYLOAD BUILDERS
+# =========================================================
 def build_backup_payload(shop: Shop, setting: BackupSetting) -> dict:
     """
     Shop-scoped export only.
@@ -149,12 +440,22 @@ def build_backup_payload(shop: Shop, setting: BackupSetting) -> dict:
             "shop": serialize_queryset(
                 Shop.objects.filter(pk=shop.pk),
                 [
-                    "id", "name", "code", "slug", "business_type",
-                    "address", "phone", "email",
-                    "subdomain", "custom_domain",
-                    "frontend_url", "backend_url",
-                    "is_active", "notes",
-                    "created_at", "updated_at",
+                    "id",
+                    "name",
+                    "code",
+                    "slug",
+                    "business_type",
+                    "address",
+                    "phone",
+                    "email",
+                    "subdomain",
+                    "custom_domain",
+                    "frontend_url",
+                    "backend_url",
+                    "is_active",
+                    "notes",
+                    "created_at",
+                    "updated_at",
                 ],
             ),
             "customers": serialize_queryset(
@@ -176,34 +477,69 @@ def build_backup_payload(shop: Shop, setting: BackupSetting) -> dict:
             "products": serialize_queryset(
                 Product.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "name", "code", "sku", "item_type", "category_id",
-                    "description", "stock", "track_stock",
-                    "buy_price", "sell_price", "weight",
-                    "unit_id", "supplier_id",
-                    "is_active", "created_at", "updated_at",
+                    "id",
+                    "name",
+                    "code",
+                    "sku",
+                    "item_type",
+                    "category_id",
+                    "description",
+                    "stock",
+                    "track_stock",
+                    "buy_price",
+                    "sell_price",
+                    "weight",
+                    "unit_id",
+                    "supplier_id",
+                    "is_active",
+                    "created_at",
+                    "updated_at",
                 ],
             ),
             "purchases": serialize_queryset(
                 Purchase.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "supplier_id", "invoice_id", "purchase_date", "note",
-                    "created_at", "updated_at", "created_by_id",
+                    "id",
+                    "supplier_id",
+                    "invoice_id",
+                    "purchase_date",
+                    "note",
+                    "created_at",
+                    "updated_at",
+                    "created_by_id",
                 ],
             ),
             "purchase_items": serialize_queryset(
                 PurchaseItem.objects.filter(purchase__shop=shop).order_by("id"),
                 [
-                    "id", "purchase_id", "product_id", "quantity",
-                    "cost_price", "expired_date", "batch_code", "created_at",
+                    "id",
+                    "purchase_id",
+                    "product_id",
+                    "quantity",
+                    "cost_price",
+                    "expired_date",
+                    "batch_code",
+                    "created_at",
                 ],
             ),
             "orders": serialize_queryset(
                 Order.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "invoice_number", "customer_id", "created_at",
-                    "payment_method", "subtotal", "discount", "tax", "total",
-                    "notes", "is_paid", "default_order_type",
-                    "table_number", "delivery_address", "delivery_fee",
+                    "id",
+                    "invoice_number",
+                    "customer_id",
+                    "created_at",
+                    "payment_method",
+                    "subtotal",
+                    "discount",
+                    "tax",
+                    "total",
+                    "notes",
+                    "is_paid",
+                    "default_order_type",
+                    "table_number",
+                    "delivery_address",
+                    "delivery_fee",
                     "served_by_id",
                 ],
             ),
@@ -218,54 +554,101 @@ def build_backup_payload(shop: Shop, setting: BackupSetting) -> dict:
             "payment_methods": serialize_queryset(
                 PaymentMethod.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "name", "code", "payment_type",
-                    "requires_bank_account", "is_active", "note",
+                    "id",
+                    "name",
+                    "code",
+                    "payment_type",
+                    "requires_bank_account",
+                    "is_active",
+                    "note",
                 ],
             ),
             "bank_accounts": serialize_queryset(
                 BankAccount.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "name", "bank_name", "account_number", "account_holder",
-                    "account_type", "opening_balance", "current_balance",
-                    "is_active", "note", "created_at",
+                    "id",
+                    "name",
+                    "bank_name",
+                    "account_number",
+                    "account_holder",
+                    "account_type",
+                    "opening_balance",
+                    "current_balance",
+                    "is_active",
+                    "note",
+                    "created_at",
                 ],
             ),
             "sale_payments": serialize_queryset(
                 SalePayment.objects.filter(order__shop=shop).order_by("id"),
                 [
-                    "id", "order_id", "payment_method_id", "bank_account_id",
-                    "amount", "reference_number", "note", "paid_at", "created_by_id",
+                    "id",
+                    "order_id",
+                    "payment_method_id",
+                    "bank_account_id",
+                    "amount",
+                    "reference_number",
+                    "note",
+                    "paid_at",
+                    "created_by_id",
                 ],
             ),
             "bank_ledgers": serialize_queryset(
                 BankLedger.objects.filter(bank_account__shop=shop).order_by("id"),
                 [
-                    "id", "bank_account_id", "transaction_type", "direction",
-                    "amount", "balance_before", "balance_after",
-                    "reference_order_id", "reference_payment_id",
-                    "description", "created_at", "created_by_id",
+                    "id",
+                    "bank_account_id",
+                    "transaction_type",
+                    "direction",
+                    "amount",
+                    "balance_before",
+                    "balance_after",
+                    "reference_order_id",
+                    "reference_payment_id",
+                    "description",
+                    "created_at",
+                    "created_by_id",
                 ],
             ),
             "stock_movements": serialize_queryset(
                 StockMovement.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "product_id", "movement_type",
-                    "quantity_delta", "before_stock", "after_stock",
-                    "note", "ref_model", "ref_id", "created_at", "created_by_id",
+                    "id",
+                    "product_id",
+                    "movement_type",
+                    "quantity_delta",
+                    "before_stock",
+                    "after_stock",
+                    "note",
+                    "ref_model",
+                    "ref_id",
+                    "created_at",
+                    "created_by_id",
                 ],
             ),
             "stock_adjustments": serialize_queryset(
                 StockAdjustment.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "product_id", "old_stock", "new_stock",
-                    "reason", "note", "adjusted_at", "adjusted_by_id",
+                    "id",
+                    "product_id",
+                    "old_stock",
+                    "new_stock",
+                    "reason",
+                    "note",
+                    "adjusted_at",
+                    "adjusted_by_id",
                 ],
             ),
             "inventory_counts": serialize_queryset(
                 InventoryCount.objects.filter(shop=shop).order_by("id"),
                 [
-                    "id", "title", "note", "counted_at", "counted_by_id",
-                    "status", "created_at",
+                    "id",
+                    "title",
+                    "note",
+                    "counted_at",
+                    "counted_by_id",
+                    "status",
+                    "created_at",
                 ],
             ),
             "inventory_count_items": serialize_queryset(
@@ -291,8 +674,15 @@ def build_backup_payload(shop: Shop, setting: BackupSetting) -> dict:
         payload["data"]["users"] = serialize_queryset(
             CustomUser.objects.filter(shop=shop).order_by("id"),
             [
-                "id", "username", "first_name", "last_name", "email",
-                "role", "is_active", "date_joined", "last_login",
+                "id",
+                "username",
+                "first_name",
+                "last_name",
+                "email",
+                "role",
+                "is_active",
+                "date_joined",
+                "last_login",
             ],
         )
 
@@ -310,7 +700,7 @@ def build_backup_payload(shop: Shop, setting: BackupSetting) -> dict:
             "last_manual_backup_at": setting.last_manual_backup_at.isoformat() if setting.last_manual_backup_at else None,
         }
 
-    return payload
+    return deep_normalize_json(payload)
 
 
 # =========================================================
@@ -326,6 +716,11 @@ def create_backup_zip(
     Membuat backup zip berisi:
     - metadata.json
     - data.json
+    - media/... (jika include_media=True dan file ada)
+
+    Mendukung:
+    - local media file -> zip dari abs_path
+    - remote media file -> download bytes lalu tulis ke zip
     """
     backup_dir = shop_backup_dir(shop)
 
@@ -334,6 +729,20 @@ def create_backup_zip(
     zip_path = backup_dir / zip_name
 
     payload = build_backup_payload(shop, setting)
+
+    media_result = {"files": [], "skipped": []}
+    if setting.include_media:
+        media_result = collect_media_files(shop, setting)
+        payload["metadata"]["media_export"] = build_media_export_summary(media_result)
+    else:
+        payload["metadata"]["media_export"] = {
+            "exported_count": 0,
+            "skipped_count": 0,
+            "total_size_bytes": 0,
+            "total_size_label": "0 B",
+            "exported_files": [],
+            "skipped_files": [],
+        }
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmpdir_path = Path(tmpdir)
@@ -350,14 +759,27 @@ def create_backup_zip(
             zf.write(metadata_path, arcname="metadata.json")
             zf.write(data_path, arcname="data.json")
 
-            # Tahap berikutnya:
-            # kalau include_media=True, export file media/logo/product image di sini
+            # export media fisik / remote
+            for item in media_result.get("files", []):
+                try:
+                    if item.get("source_type") == "local" and item.get("abs_path"):
+                        zf.write(item["abs_path"], arcname=item["zip_path"])
+                    elif item.get("source_type") == "remote":
+                        zf.writestr(item["zip_path"], item["content"])
+                except Exception:
+                    # jangan bikin seluruh backup gagal hanya karena 1 file bermasalah
+                    pass
 
     file_size_bytes = zip_path.stat().st_size
     checksum = compute_sha256(zip_path)
 
-    rel_media_path = zip_path.relative_to(Path(settings.MEDIA_ROOT))
-    backup_history.file.name = str(rel_media_path).replace("\\", "/")
+    media_root_path = Path(settings.MEDIA_ROOT)
+    try:
+        rel_media_path = zip_path.relative_to(media_root_path)
+        backup_history.file.name = str(rel_media_path).replace("\\", "/")
+    except ValueError:
+        # fallback kalau BACKUP_ROOT berada di luar MEDIA_ROOT
+        backup_history.file.name = f"backups/{shop.code.strip().upper()}/{zip_name}"
 
     return {
         "file_name": zip_name,
@@ -379,7 +801,8 @@ def cleanup_old_backups(shop: Shop, keep_last: int):
         status=BackupHistory.Status.SUCCESS,
     ).order_by("-completed_at", "-id")
 
-    old_items = list(qs[keep_last:])
+    keep_count = max(int(keep_last or 0), 0)
+    old_items = list(qs[keep_count:])
 
     for item in old_items:
         if item.file:

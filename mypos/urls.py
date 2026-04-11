@@ -55,5 +55,5 @@ urlpatterns = [
     path("api/", include("pos.urls")),
 ]
 
-if settings.DEBUG:
+if settings.DEBUG or getattr(settings, "MEDIA_BACKEND", "local") == "local":
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

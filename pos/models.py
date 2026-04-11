@@ -7,7 +7,6 @@ from django.utils.text import slugify
 from django.core.exceptions import ValidationError
 from django.contrib.auth.models import AbstractUser
 from rest_framework.authtoken.models import Token
-from cloudinary.models import CloudinaryField
 from .models_backup import BackupSetting, BackupHistory, RestoreHistory
 from .models_import import ImportJob, ImportRowError
 from .models_shift import Shift, ShiftStatus
@@ -217,8 +216,8 @@ class Shop(CleanSaveMixin, models.Model):
     is_active = models.BooleanField(default=True)
     notes = models.TextField(blank=True, default="")
 
-    logo = CloudinaryField("shop_logo", blank=True, null=True)
-    all_category_icon = CloudinaryField("all_category_icon", blank=True, null=True)
+    logo = models.ImageField(upload_to="shops/logos/", blank=True, null=True)
+    all_category_icon = models.ImageField(upload_to="shops/category_icons/", blank=True, null=True)
 
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -398,7 +397,7 @@ class Supplier(CleanSaveMixin, models.Model):
 class Category(CleanSaveMixin, models.Model):
     shop = models.ForeignKey("Shop", on_delete=models.CASCADE, related_name="categories")
     name = models.CharField(max_length=100)
-    icon = CloudinaryField("category_icon", blank=True, null=True)
+    icon = models.ImageField(upload_to="categories/icons/", blank=True, null=True)
 
     class Meta:
         indexes = [
@@ -500,7 +499,7 @@ class Product(CleanSaveMixin, models.Model):
         related_name="products"
     )
 
-    image = CloudinaryField("product_image", blank=True, null=True)
+    image = models.ImageField(upload_to="products/images/", blank=True, null=True)
     is_active = models.BooleanField(default=True)
 
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
@@ -1259,7 +1258,7 @@ class Banner(CleanSaveMixin, models.Model):
         related_name="banners",
     )
     title = models.CharField(max_length=100)
-    image = CloudinaryField("banner_image")
+    image = models.ImageField(upload_to="banners/", blank=True, null=True)
     active = models.BooleanField(default=True)
 
     class Meta:

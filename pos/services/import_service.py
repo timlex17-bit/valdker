@@ -1,5 +1,3 @@
-# pos/services/import_service.py
-
 from io import BytesIO
 
 from django.db import transaction
@@ -45,6 +43,9 @@ TEMPLATE_SHEETS = {
 }
 
 
+# =========================================================
+# TEMPLATE BUILDERS
+# =========================================================
 def build_template_workbook():
     wb = Workbook()
     default_sheet = wb.active
@@ -70,10 +71,19 @@ def template_info():
 
 
 # =========================================================
-# FILE HELPERS
+# FILE / VALUE HELPERS
 # =========================================================
+def _load_workbook(file_path: str):
+    try:
+        return load_workbook(file_path, data_only=True)
+    except FileNotFoundError:
+        raise ValueError("Import file not found.")
+    except Exception as e:
+        raise ValueError(f"Failed to read workbook: {e}")
+
+
 def _safe_str(value):
-    return (str(value).strip() if value is not None else "")
+    return str(value).strip() if value is not None else ""
 
 
 def _safe_int(value, default=0):
@@ -97,7 +107,7 @@ def _safe_decimal(value, default=0):
 def _safe_bool(value, default=False):
     if value in (True, False):
         return value
-    if value is None or value == "":
+    if value in ("", None):
         return default
 
     text = str(value).strip().lower()
@@ -114,6 +124,7 @@ def _sheet_headers(ws):
 
 def _row_to_dict(headers, row):
     data = {}
+    row = row or []
     for idx, header in enumerate(headers):
         data[header] = row[idx] if idx < len(row) else None
     return data
@@ -133,184 +144,388 @@ def _add_error(import_job: ImportJob, sheet_name: str, row_number: int, field_na
     )
 
 
+def _is_blank_row(row_values):
+    if not row_values:
+        return True
+    return not any(v not in (None, "", " ") for v in row_values)
+
+
+def _normalize_sheet_name(sheet_name: str):
+    return _safe_str(sheet_name)
+
+
+# =========================================================
+# VALIDATION LOGIC PER SHEET
+# =========================================================
+def _validate_headers(import_job: ImportJob, sheet_name: str, headers: list[str]):
+    expected = TEMPLATE_SHEETS.get(sheet_name)
+    if expected is None:
+        return [{
+            "field_name": "__sheet__",
+            "message": f"Unknown sheet '{sheet_name}'.",
+        }]
+
+    if headers != expected:
+        return [{
+            "field_name": "__header__",
+            "message": f"Invalid header for sheet '{sheet_name}'. Expected: {expected}",
+        }]
+
+    return []
+
+
+def _validate_row_by_sheet(
+    import_job: ImportJob,
+    sheet_name: str,
+    row_number: int,
+    row_data: dict,
+    *,
+    existing_categories=None,
+    existing_units=None,
+    existing_suppliers=None,
+    existing_products=None,
+    file_categories=None,
+    file_units=None,
+    file_suppliers=None,
+    file_products=None,
+):
+    errors = []
+
+    existing_categories = existing_categories or set()
+    existing_units = existing_units or set()
+    existing_suppliers = existing_suppliers or set()
+    existing_products = existing_products or set()
+
+    file_categories = file_categories or set()
+    file_units = file_units or set()
+    file_suppliers = file_suppliers or set()
+    file_products = file_products or set()
+
+    if sheet_name == "Categories":
+        name = _safe_str(row_data.get("name"))
+        if not name:
+            errors.append({"field_name": "name", "message": "Category name is required."})
+
+    elif sheet_name == "Units":
+        name = _safe_str(row_data.get("name"))
+        if not name:
+            errors.append({"field_name": "name", "message": "Unit name is required."})
+
+    elif sheet_name == "Customers":
+        name = _safe_str(row_data.get("name"))
+        if not name:
+            errors.append({"field_name": "name", "message": "Customer name is required."})
+
+        try:
+            _safe_int(row_data.get("points"), default=0)
+        except ValueError as e:
+            errors.append({"field_name": "points", "message": str(e)})
+
+    elif sheet_name == "Suppliers":
+        name = _safe_str(row_data.get("name"))
+        if not name:
+            errors.append({"field_name": "name", "message": "Supplier name is required."})
+
+    elif sheet_name == "Products":
+        name = _safe_str(row_data.get("name"))
+        code = _safe_str(row_data.get("code"))
+        item_type = _safe_str(row_data.get("item_type")).lower()
+        category_name = _safe_str(row_data.get("category"))
+        unit_name = _safe_str(row_data.get("unit"))
+        supplier_name = _safe_str(row_data.get("supplier"))
+
+        if not name:
+            errors.append({"field_name": "name", "message": "Product name is required."})
+
+        if not code:
+            errors.append({"field_name": "code", "message": "Product code is required."})
+
+        if item_type and item_type not in {"product", "service", "part"}:
+            errors.append({
+                "field_name": "item_type",
+                "message": "Item type must be one of: product, service, part.",
+            })
+
+        try:
+            _safe_decimal(row_data.get("buy_price"), default=0)
+        except ValueError as e:
+            errors.append({"field_name": "buy_price", "message": str(e)})
+
+        try:
+            _safe_decimal(row_data.get("sell_price"), default=0)
+        except ValueError as e:
+            errors.append({"field_name": "sell_price", "message": str(e)})
+
+        try:
+            _safe_int(row_data.get("stock"), default=0)
+        except ValueError as e:
+            errors.append({"field_name": "stock", "message": str(e)})
+
+        if category_name:
+            category_key = category_name.lower()
+            if category_key not in existing_categories and category_key not in file_categories:
+                errors.append({
+                    "field_name": "category",
+                    "message": f"Category '{category_name}' not found in this file or this shop.",
+                })
+
+        if unit_name:
+            unit_key = unit_name.lower()
+            if unit_key not in existing_units and unit_key not in file_units:
+                errors.append({
+                    "field_name": "unit",
+                    "message": f"Unit '{unit_name}' not found in this file or this shop.",
+                })
+
+        if supplier_name:
+            supplier_key = supplier_name.lower()
+            if supplier_key not in existing_suppliers and supplier_key not in file_suppliers:
+                errors.append({
+                    "field_name": "supplier",
+                    "message": f"Supplier '{supplier_name}' not found in this file or this shop.",
+                })
+
+    elif sheet_name == "OpeningStock":
+        product_code = _safe_str(row_data.get("product_code"))
+        quantity = row_data.get("quantity")
+
+        if not product_code:
+            errors.append({"field_name": "product_code", "message": "Product code is required."})
+        else:
+            product_key = product_code.lower()
+            if product_key not in existing_products and product_key not in file_products:
+                errors.append({
+                    "field_name": "product_code",
+                    "message": f"Product with code '{product_code}' not found in this file or this shop.",
+                })
+
+        try:
+            _safe_int(quantity, default=0)
+        except ValueError as e:
+            errors.append({"field_name": "quantity", "message": str(e)})
+
+    else:
+        errors.append({
+            "field_name": "__sheet__",
+            "message": f"Unsupported sheet '{sheet_name}'.",
+        })
+
+    return errors
+
+
 # =========================================================
 # VALIDATION
 # =========================================================
 def validate_import_workbook(import_job: ImportJob):
-    if not import_job.file:
-        raise ValueError("Import file is missing.")
-
+    workbook = _load_workbook(import_job.file.path)
     _clear_previous_errors(import_job)
 
-    wb = load_workbook(import_job.file.path, data_only=True)
-
-    for required_sheet, required_headers in TEMPLATE_SHEETS.items():
-        if required_sheet not in wb.sheetnames:
-            _add_error(import_job, required_sheet, 1, "", f"Sheet '{required_sheet}' is missing.")
-            continue
-
-        ws = wb[required_sheet]
-        actual_headers = _sheet_headers(ws)
-
-        if actual_headers != required_headers:
-            _add_error(
-                import_job,
-                required_sheet,
-                1,
-                "",
-                f"Invalid headers. Expected: {required_headers}",
-            )
+    shop = import_job.shop
 
     total_rows = 0
     valid_rows = 0
     invalid_rows = 0
 
-    for sheet_name, headers in TEMPLATE_SHEETS.items():
-        if sheet_name not in wb.sheetnames:
+    preview_data = {
+        "Categories": [],
+        "Units": [],
+        "Products": [],
+        "Customers": [],
+        "Suppliers": [],
+        "OpeningStock": [],
+    }
+
+    # preload existing data from DB once
+    existing_categories = set(
+        Category.objects.filter(shop=shop).values_list("name", flat=True)
+    )
+    existing_units = set(
+        Unit.objects.filter(shop=shop).values_list("name", flat=True)
+    )
+    existing_suppliers = set(
+        Supplier.objects.filter(shop=shop).values_list("name", flat=True)
+    )
+    existing_products = set(
+        Product.objects.filter(shop=shop).values_list("code", flat=True)
+    )
+
+    existing_categories = {str(x).strip().lower() for x in existing_categories if x}
+    existing_units = {str(x).strip().lower() for x in existing_units if x}
+    existing_suppliers = {str(x).strip().lower() for x in existing_suppliers if x}
+    existing_products = {str(x).strip().lower() for x in existing_products if x}
+
+    # cache references found inside the uploaded workbook
+    file_categories = set()
+    file_units = set()
+    file_suppliers = set()
+    file_products = set()
+
+    header_has_error = False
+
+    # -----------------------------------------------------
+    # PASS 1: collect in-file references
+    # -----------------------------------------------------
+    for sheet_name in workbook.sheetnames:
+        normalized_sheet_name = _normalize_sheet_name(sheet_name)
+        if normalized_sheet_name not in TEMPLATE_SHEETS:
             continue
 
-        ws = wb[sheet_name]
-        actual_headers = _sheet_headers(ws)
-        if actual_headers != headers:
+        ws = workbook[sheet_name]
+        headers = _sheet_headers(ws)
+
+        if headers != TEMPLATE_SHEETS[normalized_sheet_name]:
             continue
 
-        for excel_row_number, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+        if ws.max_row < 2:
+            continue
+
+        for _, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             row_values = list(row or [])
-            if not any(v not in ("", None) for v in row_values):
+            if _is_blank_row(row_values):
                 continue
 
-            total_rows += 1
-            row_has_error = False
             row_data = _row_to_dict(headers, row_values)
 
+            if normalized_sheet_name == "Categories":
+                name = _safe_str(row_data.get("name"))
+                if name:
+                    file_categories.add(name.lower())
+
+            elif normalized_sheet_name == "Units":
+                name = _safe_str(row_data.get("name"))
+                if name:
+                    file_units.add(name.lower())
+
+            elif normalized_sheet_name == "Suppliers":
+                name = _safe_str(row_data.get("name"))
+                if name:
+                    file_suppliers.add(name.lower())
+
+            elif normalized_sheet_name == "Products":
+                code = _safe_str(row_data.get("code"))
+                if code:
+                    file_products.add(code.lower())
+
+    # -----------------------------------------------------
+    # PASS 2: validate rows
+    # -----------------------------------------------------
+    for sheet_name in workbook.sheetnames:
+        normalized_sheet_name = _normalize_sheet_name(sheet_name)
+        ws = workbook[sheet_name]
+        headers = _sheet_headers(ws)
+
+        header_errors = _validate_headers(import_job, normalized_sheet_name, headers)
+        if header_errors:
+            header_has_error = True
+            for err in header_errors:
+                _add_error(
+                    import_job=import_job,
+                    sheet_name=normalized_sheet_name,
+                    row_number=1,
+                    field_name=err.get("field_name", "__header__"),
+                    message=err.get("message", "Invalid header."),
+                )
+            continue
+
+        if ws.max_row < 2:
+            continue
+
+        for row_index, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
+            row_values = list(row or [])
+            if _is_blank_row(row_values):
+                continue
+
+            excel_row_number = row_index
+            total_rows += 1
+
+            row_data = _row_to_dict(headers, row_values)
+
+            if len(preview_data.get(normalized_sheet_name, [])) < 20:
+                safe_row = {}
+                for key, value in row_data.items():
+                    if value is None:
+                        safe_row[key] = ""
+                    elif isinstance(value, (str, int, float, bool)):
+                        safe_row[key] = value
+                    else:
+                        safe_row[key] = str(value)
+
+                preview_data.setdefault(normalized_sheet_name, []).append({
+                    "row_number": excel_row_number,
+                    "data": safe_row,
+                })
+
             try:
-                if sheet_name == "Categories":
-                    name = _safe_str(row_data.get("name"))
-                    if not name:
-                        _add_error(import_job, sheet_name, excel_row_number, "name", "Category name is required.")
-                        row_has_error = True
-
-                elif sheet_name == "Units":
-                    name = _safe_str(row_data.get("name"))
-                    if not name:
-                        _add_error(import_job, sheet_name, excel_row_number, "name", "Unit name is required.")
-                        row_has_error = True
-
-                elif sheet_name == "Customers":
-                    name = _safe_str(row_data.get("name"))
-                    if not name:
-                        _add_error(import_job, sheet_name, excel_row_number, "name", "Customer name cannot be empty.")
-                        row_has_error = True
-
-                    email = _safe_str(row_data.get("email"))
-                    if email and "@" not in email:
-                        _add_error(import_job, sheet_name, excel_row_number, "email", "Email format is invalid.")
-                        row_has_error = True
-
-                    points = row_data.get("points")
-                    try:
-                        if points not in ("", None):
-                            parsed_points = _safe_int(points)
-                            if parsed_points < 0:
-                                raise ValueError("Points cannot be negative.")
-                    except Exception as e:
-                        _add_error(import_job, sheet_name, excel_row_number, "points", str(e))
-                        row_has_error = True
-
-                elif sheet_name == "Suppliers":
-                    name = _safe_str(row_data.get("name"))
-                    if not name:
-                        _add_error(import_job, sheet_name, excel_row_number, "name", "Supplier name is required.")
-                        row_has_error = True
-
-                    email = _safe_str(row_data.get("email"))
-                    if email and "@" not in email:
-                        _add_error(import_job, sheet_name, excel_row_number, "email", "Email format is invalid.")
-                        row_has_error = True
-
-                elif sheet_name == "Products":
-                    name = _safe_str(row_data.get("name"))
-                    code = _safe_str(row_data.get("code"))
-                    item_type = _safe_str(row_data.get("item_type")).lower() or "product"
-
-                    if not name:
-                        _add_error(import_job, sheet_name, excel_row_number, "name", "Product name is required.")
-                        row_has_error = True
-
-                    if not code:
-                        _add_error(import_job, sheet_name, excel_row_number, "code", "Product code is required.")
-                        row_has_error = True
-
-                    if item_type not in {"product", "menu", "service", "sparepart"}:
-                        _add_error(import_job, sheet_name, excel_row_number, "item_type", "Invalid item type.")
-                        row_has_error = True
-
-                    try:
-                        buy_price = _safe_decimal(row_data.get("buy_price"), default=0)
-                        if buy_price < 0:
-                            raise ValueError("Buy price cannot be negative.")
-                    except Exception as e:
-                        _add_error(import_job, sheet_name, excel_row_number, "buy_price", str(e))
-                        row_has_error = True
-
-                    try:
-                        sell_price = _safe_decimal(row_data.get("sell_price"), default=0)
-                        if sell_price < 0:
-                            raise ValueError("Selling price cannot be negative.")
-                    except Exception as e:
-                        _add_error(import_job, sheet_name, excel_row_number, "sell_price", str(e))
-                        row_has_error = True
-
-                    try:
-                        stock = _safe_int(row_data.get("stock"), default=0)
-                        if stock < 0:
-                            raise ValueError("Stock cannot be negative.")
-                    except Exception as e:
-                        _add_error(import_job, sheet_name, excel_row_number, "stock", str(e))
-                        row_has_error = True
-
-                elif sheet_name == "OpeningStock":
-                    product_code = _safe_str(row_data.get("product_code"))
-                    if not product_code:
-                        _add_error(import_job, sheet_name, excel_row_number, "product_code", "Product code is required.")
-                        row_has_error = True
-
-                    try:
-                        qty = _safe_int(row_data.get("quantity"))
-                        if qty < 0:
-                            raise ValueError("Quantity cannot be negative.")
-                    except Exception as e:
-                        _add_error(import_job, sheet_name, excel_row_number, "quantity", str(e))
-                        row_has_error = True
-
+                row_errors = _validate_row_by_sheet(
+                    import_job=import_job,
+                    sheet_name=normalized_sheet_name,
+                    row_number=excel_row_number,
+                    row_data=row_data,
+                    existing_categories=existing_categories,
+                    existing_units=existing_units,
+                    existing_suppliers=existing_suppliers,
+                    existing_products=existing_products,
+                    file_categories=file_categories,
+                    file_units=file_units,
+                    file_suppliers=file_suppliers,
+                    file_products=file_products,
+                )
             except Exception as e:
-                _add_error(import_job, sheet_name, excel_row_number, "", str(e))
-                row_has_error = True
+                row_errors = [{
+                    "field_name": "__all__",
+                    "message": str(e),
+                }]
 
-            if row_has_error:
+            if row_errors:
                 invalid_rows += 1
+                for err in row_errors:
+                    _add_error(
+                        import_job=import_job,
+                        sheet_name=normalized_sheet_name,
+                        row_number=excel_row_number,
+                        field_name=err.get("field_name", "__all__"),
+                        message=err.get("message", "Invalid row."),
+                    )
             else:
                 valid_rows += 1
 
-    import_job.mark_validated(
-        total_rows=total_rows,
-        valid_rows=valid_rows,
-        invalid_rows=invalid_rows,
-        note="Validation preview generated.",
-        metadata={
-            "detected_sheets": wb.sheetnames,
-            "template_sheets": list(TEMPLATE_SHEETS.keys()),
-        },
+    has_errors = header_has_error or invalid_rows > 0
+
+    import_job.status = (
+        ImportJob.Status.VALIDATED
+        if not has_errors
+        else ImportJob.Status.UPLOADED
     )
+    import_job.metadata = {
+        **(import_job.metadata or {}),
+        "validation_summary": {
+            "total_rows": total_rows,
+            "valid_rows": valid_rows,
+            "invalid_rows": invalid_rows,
+            "has_errors": has_errors,
+        },
+        "preview": preview_data,
+        "validated_at": timezone.localtime().isoformat(),
+    }
+    import_job.save(update_fields=["status", "metadata"])
 
     return {
         "import_job_id": import_job.id,
+        "status": import_job.status,
         "total_rows": total_rows,
         "valid_rows": valid_rows,
         "invalid_rows": invalid_rows,
-        "errors": list(import_job.row_errors.all()),
+        "errors": [
+            {
+                "sheet_name": err.sheet_name,
+                "row_number": err.row_number,
+                "field_name": err.field_name,
+                "message": err.message,
+            }
+            for err in import_job.row_errors.all().order_by("sheet_name", "row_number", "id")
+        ],
+        "preview": preview_data,
     }
-
 
 # =========================================================
 # IMPORT EXECUTION
@@ -336,7 +551,8 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
     if import_job.status == ImportJob.Status.UPLOADED:
         validate_import_workbook(import_job)
 
-    if import_job.invalid_rows > 0:
+    current_invalid_rows = import_job.row_errors.count()
+    if current_invalid_rows > 0:
         raise ValueError("Import cannot continue because invalid rows still exist.")
 
     if not skip_backup_check and not _latest_successful_backup_exists(import_job.shop):
@@ -355,46 +571,73 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
     imported_rows = 0
     skipped_rows = 0
 
+    # -----------------------------------------------------
     # Categories
+    # -----------------------------------------------------
     if "Categories" in wb.sheetnames:
         ws = wb["Categories"]
         headers = _sheet_headers(ws)
         if headers == TEMPLATE_SHEETS["Categories"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(v not in ("", None) for v in row or []):
+                if _is_blank_row(row):
                     continue
+
                 data = _row_to_dict(headers, row)
                 name = _safe_str(data.get("name"))
+                if not name:
+                    skipped_rows += 1
+                    continue
+
                 obj, created = Category.objects.get_or_create(shop=shop, name=name)
                 category_map[name.lower()] = obj
-                imported_rows += 1 if created else 0
-                skipped_rows += 0 if created else 1
 
+                if created:
+                    imported_rows += 1
+                else:
+                    skipped_rows += 1
+
+    # -----------------------------------------------------
     # Units
+    # -----------------------------------------------------
     if "Units" in wb.sheetnames:
         ws = wb["Units"]
         headers = _sheet_headers(ws)
         if headers == TEMPLATE_SHEETS["Units"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(v not in ("", None) for v in row or []):
+                if _is_blank_row(row):
                     continue
+
                 data = _row_to_dict(headers, row)
                 name = _safe_str(data.get("name"))
+                if not name:
+                    skipped_rows += 1
+                    continue
+
                 obj, created = Unit.objects.get_or_create(shop=shop, name=name)
                 unit_map[name.lower()] = obj
-                imported_rows += 1 if created else 0
-                skipped_rows += 0 if created else 1
 
+                if created:
+                    imported_rows += 1
+                else:
+                    skipped_rows += 1
+
+    # -----------------------------------------------------
     # Suppliers
+    # -----------------------------------------------------
     if "Suppliers" in wb.sheetnames:
         ws = wb["Suppliers"]
         headers = _sheet_headers(ws)
         if headers == TEMPLATE_SHEETS["Suppliers"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(v not in ("", None) for v in row or []):
+                if _is_blank_row(row):
                     continue
+
                 data = _row_to_dict(headers, row)
                 name = _safe_str(data.get("name"))
+                if not name:
+                    skipped_rows += 1
+                    continue
+
                 obj, created = Supplier.objects.get_or_create(
                     shop=shop,
                     name=name,
@@ -406,45 +649,76 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     },
                 )
                 supplier_map[name.lower()] = obj
-                imported_rows += 1 if created else 0
-                skipped_rows += 0 if created else 1
 
+                if created:
+                    imported_rows += 1
+                else:
+                    skipped_rows += 1
+
+    # -----------------------------------------------------
     # Customers
+    # -----------------------------------------------------
     if "Customers" in wb.sheetnames:
         ws = wb["Customers"]
         headers = _sheet_headers(ws)
         if headers == TEMPLATE_SHEETS["Customers"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(v not in ("", None) for v in row or []):
+                if _is_blank_row(row):
                     continue
+
                 data = _row_to_dict(headers, row)
                 name = _safe_str(data.get("name"))
+                if not name:
+                    skipped_rows += 1
+                    continue
+
                 defaults = {
                     "cell": _safe_str(data.get("cell")),
                     "email": _safe_str(data.get("email")) or None,
                     "address": _safe_str(data.get("address")),
                     "points": _safe_int(data.get("points"), default=0),
                 }
+
                 obj, created = Customer.objects.get_or_create(
                     shop=shop,
                     name=name,
                     defaults=defaults,
                 )
-                imported_rows += 1 if created else 0
-                skipped_rows += 0 if created else 1
 
+                if created:
+                    imported_rows += 1
+                else:
+                    skipped_rows += 1
+
+    # preload reference after category/unit/supplier import
+    for c in Category.objects.filter(shop=shop):
+        category_map[c.name.lower()] = c
+
+    for u in Unit.objects.filter(shop=shop):
+        unit_map[u.name.lower()] = u
+
+    for s in Supplier.objects.filter(shop=shop):
+        supplier_map[s.name.lower()] = s
+
+    # -----------------------------------------------------
     # Products
+    # -----------------------------------------------------
     if "Products" in wb.sheetnames:
         ws = wb["Products"]
         headers = _sheet_headers(ws)
         if headers == TEMPLATE_SHEETS["Products"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(v not in ("", None) for v in row or []):
+                if _is_blank_row(row):
                     continue
 
                 data = _row_to_dict(headers, row)
+
                 code = _safe_str(data.get("code"))
                 name = _safe_str(data.get("name"))
+                if not code or not name:
+                    skipped_rows += 1
+                    continue
+
                 category_name = _safe_str(data.get("category")).lower()
                 unit_name = _safe_str(data.get("unit")).lower()
                 supplier_name = _safe_str(data.get("supplier")).lower()
@@ -476,7 +750,6 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                 )
 
                 if not created:
-                    # update field dasar kalau product sudah ada
                     obj.name = defaults["name"]
                     obj.sku = defaults["sku"]
                     obj.item_type = defaults["item_type"]
@@ -488,33 +761,47 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     obj.buy_price = defaults["buy_price"]
                     obj.sell_price = defaults["sell_price"]
                     obj.is_active = defaults["is_active"]
+                    # stock product jangan dioverride di sini; opening stock di sheet terpisah
                     obj.save()
 
                 product_map[obj.code.lower()] = obj
-                imported_rows += 1 if created else 0
-                skipped_rows += 0 if created else 1
 
-    # Opening stock
+                if created:
+                    imported_rows += 1
+                else:
+                    skipped_rows += 1
+
+    # -----------------------------------------------------
+    # Opening Stock
+    # -----------------------------------------------------
     if "OpeningStock" in wb.sheetnames:
         ws = wb["OpeningStock"]
         headers = _sheet_headers(ws)
         if headers == TEMPLATE_SHEETS["OpeningStock"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
-                if not any(v not in ("", None) for v in row or []):
+                if _is_blank_row(row):
                     continue
 
                 data = _row_to_dict(headers, row)
                 product_code = _safe_str(data.get("product_code")).lower()
                 qty = _safe_int(data.get("quantity"), default=0)
 
+                if not product_code:
+                    skipped_rows += 1
+                    continue
+
                 product = product_map.get(product_code)
                 if not product:
-                    # fallback cek db
                     product = Product.objects.filter(shop=shop, code__iexact=product_code).first()
 
-                if product:
-                    before_stock = product.stock
-                    after_stock = qty
+                if not product:
+                    skipped_rows += 1
+                    continue
+
+                before_stock = product.stock
+                after_stock = qty
+
+                if before_stock != after_stock:
                     product.stock = after_stock
                     product.save(update_fields=["stock"])
 
@@ -530,7 +817,8 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                         ref_id=import_job.id,
                         created_by=import_job.uploaded_by,
                     )
-                    imported_rows += 1
+
+                imported_rows += 1
 
     import_job.mark_completed(
         imported_rows=imported_rows,
