@@ -157,7 +157,7 @@ def _normalize_sheet_name(sheet_name: str):
 # =========================================================
 # VALIDATION LOGIC PER SHEET
 # =========================================================
-def _validate_headers(import_job: ImportJob, sheet_name: str, headers: list[str]):
+def _validate_headers(sheet_name: str, headers: list[str]):
     expected = TEMPLATE_SHEETS.get(sheet_name)
     if expected is None:
         return [{
@@ -175,9 +175,7 @@ def _validate_headers(import_job: ImportJob, sheet_name: str, headers: list[str]
 
 
 def _validate_row_by_sheet(
-    import_job: ImportJob,
     sheet_name: str,
-    row_number: int,
     row_data: dict,
     *,
     existing_categories=None,
@@ -414,7 +412,7 @@ def validate_import_workbook(import_job: ImportJob):
         ws = workbook[sheet_name]
         headers = _sheet_headers(ws)
 
-        header_errors = _validate_headers(import_job, normalized_sheet_name, headers)
+        header_errors = _validate_headers(normalized_sheet_name, headers)
         if header_errors:
             header_has_error = True
             for err in header_errors:
@@ -457,9 +455,7 @@ def validate_import_workbook(import_job: ImportJob):
 
             try:
                 row_errors = _validate_row_by_sheet(
-                    import_job=import_job,
                     sheet_name=normalized_sheet_name,
-                    row_number=excel_row_number,
                     row_data=row_data,
                     existing_categories=existing_categories,
                     existing_units=existing_units,
@@ -563,21 +559,49 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
     wb = load_workbook(import_job.file.path, data_only=True)
     shop = import_job.shop
 
-    category_map = {}
-    unit_map = {}
-    supplier_map = {}
-    product_map = {}
-
     imported_rows = 0
     skipped_rows = 0
 
-    # -----------------------------------------------------
-    # Categories
-    # -----------------------------------------------------
+    # =====================================================
+    # PRELOAD EXISTING DATA
+    # =====================================================
+    existing_categories = {
+        obj.name.strip().lower(): obj
+        for obj in Category.objects.filter(shop=shop)
+        if obj.name
+    }
+    existing_units = {
+        obj.name.strip().lower(): obj
+        for obj in Unit.objects.filter(shop=shop)
+        if obj.name
+    }
+    existing_suppliers = {
+        obj.name.strip().lower(): obj
+        for obj in Supplier.objects.filter(shop=shop)
+        if obj.name
+    }
+    existing_customers = {
+        obj.name.strip().lower(): obj
+        for obj in Customer.objects.filter(shop=shop)
+        if obj.name
+    }
+    existing_products = {
+        obj.code.strip().lower(): obj
+        for obj in Product.objects.filter(shop=shop)
+        if obj.code
+    }
+
+    # =====================================================
+    # CATEGORIES - BULK CREATE
+    # =====================================================
+    category_to_create = []
     if "Categories" in wb.sheetnames:
         ws = wb["Categories"]
         headers = _sheet_headers(ws)
+
         if headers == TEMPLATE_SHEETS["Categories"]:
+            seen_in_file = set()
+
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if _is_blank_row(row):
                     continue
@@ -588,21 +612,35 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     skipped_rows += 1
                     continue
 
-                obj, created = Category.objects.get_or_create(shop=shop, name=name)
-                category_map[name.lower()] = obj
-
-                if created:
-                    imported_rows += 1
-                else:
+                key = name.lower()
+                if key in existing_categories or key in seen_in_file:
                     skipped_rows += 1
+                    continue
 
-    # -----------------------------------------------------
-    # Units
-    # -----------------------------------------------------
+                seen_in_file.add(key)
+                category_to_create.append(Category(shop=shop, name=name))
+
+            if category_to_create:
+                Category.objects.bulk_create(category_to_create, batch_size=1000)
+                imported_rows += len(category_to_create)
+
+            existing_categories = {
+                obj.name.strip().lower(): obj
+                for obj in Category.objects.filter(shop=shop)
+                if obj.name
+            }
+
+    # =====================================================
+    # UNITS - BULK CREATE
+    # =====================================================
+    unit_to_create = []
     if "Units" in wb.sheetnames:
         ws = wb["Units"]
         headers = _sheet_headers(ws)
+
         if headers == TEMPLATE_SHEETS["Units"]:
+            seen_in_file = set()
+
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if _is_blank_row(row):
                     continue
@@ -613,21 +651,35 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     skipped_rows += 1
                     continue
 
-                obj, created = Unit.objects.get_or_create(shop=shop, name=name)
-                unit_map[name.lower()] = obj
-
-                if created:
-                    imported_rows += 1
-                else:
+                key = name.lower()
+                if key in existing_units or key in seen_in_file:
                     skipped_rows += 1
+                    continue
 
-    # -----------------------------------------------------
-    # Suppliers
-    # -----------------------------------------------------
+                seen_in_file.add(key)
+                unit_to_create.append(Unit(shop=shop, name=name))
+
+            if unit_to_create:
+                Unit.objects.bulk_create(unit_to_create, batch_size=1000)
+                imported_rows += len(unit_to_create)
+
+            existing_units = {
+                obj.name.strip().lower(): obj
+                for obj in Unit.objects.filter(shop=shop)
+                if obj.name
+            }
+
+    # =====================================================
+    # SUPPLIERS - BULK CREATE
+    # =====================================================
+    supplier_to_create = []
     if "Suppliers" in wb.sheetnames:
         ws = wb["Suppliers"]
         headers = _sheet_headers(ws)
+
         if headers == TEMPLATE_SHEETS["Suppliers"]:
+            seen_in_file = set()
+
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if _is_blank_row(row):
                     continue
@@ -638,30 +690,44 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     skipped_rows += 1
                     continue
 
-                obj, created = Supplier.objects.get_or_create(
-                    shop=shop,
-                    name=name,
-                    defaults={
-                        "contact_person": _safe_str(data.get("contact_person")),
-                        "cell": _safe_str(data.get("cell")),
-                        "email": _safe_str(data.get("email")) or None,
-                        "address": _safe_str(data.get("address")),
-                    },
-                )
-                supplier_map[name.lower()] = obj
-
-                if created:
-                    imported_rows += 1
-                else:
+                key = name.lower()
+                if key in existing_suppliers or key in seen_in_file:
                     skipped_rows += 1
+                    continue
 
-    # -----------------------------------------------------
-    # Customers
-    # -----------------------------------------------------
+                seen_in_file.add(key)
+                supplier_to_create.append(
+                    Supplier(
+                        shop=shop,
+                        name=name,
+                        contact_person=_safe_str(data.get("contact_person")),
+                        cell=_safe_str(data.get("cell")),
+                        email=_safe_str(data.get("email")) or None,
+                        address=_safe_str(data.get("address")),
+                    )
+                )
+
+            if supplier_to_create:
+                Supplier.objects.bulk_create(supplier_to_create, batch_size=1000)
+                imported_rows += len(supplier_to_create)
+
+            existing_suppliers = {
+                obj.name.strip().lower(): obj
+                for obj in Supplier.objects.filter(shop=shop)
+                if obj.name
+            }
+
+    # =====================================================
+    # CUSTOMERS - BULK CREATE
+    # =====================================================
+    customer_to_create = []
     if "Customers" in wb.sheetnames:
         ws = wb["Customers"]
         headers = _sheet_headers(ws)
+
         if headers == TEMPLATE_SHEETS["Customers"]:
+            seen_in_file = set()
+
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if _is_blank_row(row):
                     continue
@@ -672,40 +738,50 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     skipped_rows += 1
                     continue
 
-                defaults = {
-                    "cell": _safe_str(data.get("cell")),
-                    "email": _safe_str(data.get("email")) or None,
-                    "address": _safe_str(data.get("address")),
-                    "points": _safe_int(data.get("points"), default=0),
-                }
+                key = name.lower()
+                if key in existing_customers or key in seen_in_file:
+                    skipped_rows += 1
+                    continue
 
-                obj, created = Customer.objects.get_or_create(
-                    shop=shop,
-                    name=name,
-                    defaults=defaults,
+                seen_in_file.add(key)
+                customer_to_create.append(
+                    Customer(
+                        shop=shop,
+                        name=name,
+                        cell=_safe_str(data.get("cell")),
+                        email=_safe_str(data.get("email")) or None,
+                        address=_safe_str(data.get("address")),
+                        points=_safe_int(data.get("points"), default=0),
+                    )
                 )
 
-                if created:
-                    imported_rows += 1
-                else:
-                    skipped_rows += 1
+            if customer_to_create:
+                Customer.objects.bulk_create(customer_to_create, batch_size=1000)
+                imported_rows += len(customer_to_create)
 
-    # preload reference after category/unit/supplier import
-    for c in Category.objects.filter(shop=shop):
-        category_map[c.name.lower()] = c
+            existing_customers = {
+                obj.name.strip().lower(): obj
+                for obj in Customer.objects.filter(shop=shop)
+                if obj.name
+            }
 
-    for u in Unit.objects.filter(shop=shop):
-        unit_map[u.name.lower()] = u
+    # refresh references after master import
+    category_map = existing_categories
+    unit_map = existing_units
+    supplier_map = existing_suppliers
+    product_map = existing_products.copy()
 
-    for s in Supplier.objects.filter(shop=shop):
-        supplier_map[s.name.lower()] = s
+    # =====================================================
+    # PRODUCTS - BULK CREATE + BULK UPDATE
+    # =====================================================
+    products_to_create = []
+    products_to_update = []
+    seen_product_codes = set()
 
-    # -----------------------------------------------------
-    # Products
-    # -----------------------------------------------------
     if "Products" in wb.sheetnames:
         ws = wb["Products"]
         headers = _sheet_headers(ws)
+
         if headers == TEMPLATE_SHEETS["Products"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if _is_blank_row(row):
@@ -719,6 +795,14 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     skipped_rows += 1
                     continue
 
+                code_key = code.lower()
+
+                # hindari duplikat code dalam file yang sama
+                if code_key in seen_product_codes:
+                    skipped_rows += 1
+                    continue
+                seen_product_codes.add(code_key)
+
                 category_name = _safe_str(data.get("category")).lower()
                 unit_name = _safe_str(data.get("unit")).lower()
                 supplier_name = _safe_str(data.get("supplier")).lower()
@@ -727,7 +811,7 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                 unit = unit_map.get(unit_name) if unit_name else None
                 supplier = supplier_map.get(supplier_name) if supplier_name else None
 
-                defaults = {
+                prepared = {
                     "name": name,
                     "sku": _safe_str(data.get("sku")) or None,
                     "item_type": _safe_str(data.get("item_type")).lower() or "product",
@@ -743,40 +827,82 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                     "is_active": _safe_bool(data.get("is_active"), default=True),
                 }
 
-                obj, created = Product.objects.get_or_create(
-                    shop=shop,
-                    code=code,
-                    defaults=defaults,
-                )
-
-                if not created:
-                    obj.name = defaults["name"]
-                    obj.sku = defaults["sku"]
-                    obj.item_type = defaults["item_type"]
-                    obj.category = defaults["category"]
-                    obj.unit = defaults["unit"]
-                    obj.supplier = defaults["supplier"]
-                    obj.description = defaults["description"]
-                    obj.track_stock = defaults["track_stock"]
-                    obj.buy_price = defaults["buy_price"]
-                    obj.sell_price = defaults["sell_price"]
-                    obj.is_active = defaults["is_active"]
-                    # stock product jangan dioverride di sini; opening stock di sheet terpisah
-                    obj.save()
-
-                product_map[obj.code.lower()] = obj
-
-                if created:
-                    imported_rows += 1
+                existing = product_map.get(code_key)
+                if existing:
+                    existing.name = prepared["name"]
+                    existing.sku = prepared["sku"]
+                    existing.item_type = prepared["item_type"]
+                    existing.category = prepared["category"]
+                    existing.unit = prepared["unit"]
+                    existing.supplier = prepared["supplier"]
+                    existing.description = prepared["description"]
+                    existing.track_stock = prepared["track_stock"]
+                    existing.buy_price = prepared["buy_price"]
+                    existing.sell_price = prepared["sell_price"]
+                    existing.is_active = prepared["is_active"]
+                    products_to_update.append(existing)
                 else:
-                    skipped_rows += 1
+                    products_to_create.append(
+                        Product(
+                            shop=shop,
+                            code=code,
+                            name=prepared["name"],
+                            sku=prepared["sku"],
+                            item_type=prepared["item_type"],
+                            category=prepared["category"],
+                            unit=prepared["unit"],
+                            supplier=prepared["supplier"],
+                            description=prepared["description"],
+                            stock=prepared["stock"],
+                            track_stock=prepared["track_stock"],
+                            buy_price=prepared["buy_price"],
+                            sell_price=prepared["sell_price"],
+                            weight=prepared["weight"],
+                            is_active=prepared["is_active"],
+                        )
+                    )
 
-    # -----------------------------------------------------
-    # Opening Stock
-    # -----------------------------------------------------
+            if products_to_create:
+                Product.objects.bulk_create(products_to_create, batch_size=1000)
+                imported_rows += len(products_to_create)
+
+            if products_to_update:
+                Product.objects.bulk_update(
+                    products_to_update,
+                    fields=[
+                        "name",
+                        "sku",
+                        "item_type",
+                        "category",
+                        "unit",
+                        "supplier",
+                        "description",
+                        "track_stock",
+                        "buy_price",
+                        "sell_price",
+                        "is_active",
+                    ],
+                    batch_size=1000,
+                )
+                imported_rows += len(products_to_update)
+
+            product_map = {
+                obj.code.strip().lower(): obj
+                for obj in Product.objects.filter(shop=shop)
+                if obj.code
+            }
+
+    # =====================================================
+    # OPENING STOCK - BULK UPDATE + BULK MOVEMENTS
+    # =====================================================
+    stock_products_to_update = []
+    stock_movements_to_create = []
+    touched_product_ids = set()
+
     if "OpeningStock" in wb.sheetnames:
         ws = wb["OpeningStock"]
         headers = _sheet_headers(ws)
+
         if headers == TEMPLATE_SHEETS["OpeningStock"]:
             for row in ws.iter_rows(min_row=2, values_only=True):
                 if _is_blank_row(row):
@@ -792,20 +918,27 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
 
                 product = product_map.get(product_code)
                 if not product:
-                    product = Product.objects.filter(shop=shop, code__iexact=product_code).first()
-
-                if not product:
                     skipped_rows += 1
                     continue
 
                 before_stock = product.stock
                 after_stock = qty
 
-                if before_stock != after_stock:
-                    product.stock = after_stock
-                    product.save(update_fields=["stock"])
+                if before_stock == after_stock:
+                    skipped_rows += 1
+                    continue
 
-                    StockMovement.objects.create(
+                # hindari product yang sama diupdate berulang di file opening stock
+                if product.id in touched_product_ids:
+                    skipped_rows += 1
+                    continue
+
+                touched_product_ids.add(product.id)
+                product.stock = after_stock
+                stock_products_to_update.append(product)
+
+                stock_movements_to_create.append(
+                    StockMovement(
                         shop=shop,
                         product=product,
                         movement_type=StockMovement.Type.ADJUSTMENT,
@@ -817,8 +950,18 @@ def run_import(import_job: ImportJob, *, confirm_import: bool, skip_backup_check
                         ref_id=import_job.id,
                         created_by=import_job.uploaded_by,
                     )
-
+                )
                 imported_rows += 1
+
+            if stock_products_to_update:
+                Product.objects.bulk_update(
+                    stock_products_to_update,
+                    fields=["stock"],
+                    batch_size=1000,
+                )
+
+            if stock_movements_to_create:
+                StockMovement.objects.bulk_create(stock_movements_to_create, batch_size=1000)
 
     import_job.mark_completed(
         imported_rows=imported_rows,
