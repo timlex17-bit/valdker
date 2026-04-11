@@ -24,9 +24,10 @@ from .models import (
     StockAdjustment, InventoryCount,
     ProductReturn, StockMovement,
     PaymentMethod, BankAccount, SalePayment, BankLedger,
-    Purchase, PurchaseItem
+    Purchase, PurchaseItem,
+    Warehouse, WarehouseStock,
+    StockTransfer, StockTransferItem,
 )
-
 
 # ==========================================================
 # TOKEN ADMIN
@@ -54,13 +55,19 @@ class TokenProxyAdmin(admin.ModelAdmin):
 # ==========================================================
 # PURCHASE ADMIN
 # ==========================================================
-
 class PurchaseItemInline(admin.TabularInline):
 
     model = PurchaseItem
 
     extra = 0
+    
+# ==========================================================
+# STOCK TRANSFER ADMIN
+# ==========================================================
 
+class StockTransferItemInline(admin.TabularInline):
+    model = StockTransferItem
+    extra = 0    
 
 @admin.register(Purchase)
 class PurchaseAdmin(admin.ModelAdmin):
@@ -402,6 +409,137 @@ class StockMovementAdmin(admin.ModelAdmin):
     )
 
 
+@admin.register(Warehouse)
+class WarehouseAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "id",
+        "shop",
+        "name",
+        "code",
+        "location",
+        "is_default",
+        "is_active",
+        "created_at",
+    )
+
+    list_filter = (
+        "shop",
+        "is_default",
+        "is_active",
+    )
+
+    search_fields = (
+        "name",
+        "code",
+        "location",
+        "shop__name",
+        "shop__code",
+    )
+
+    ordering = ("shop", "name", "id")
+
+    list_editable = (
+        "is_active",
+    )
+
+
+@admin.register(WarehouseStock)
+class WarehouseStockAdmin(admin.ModelAdmin):
+
+    list_display = (
+        "id",
+        "shop",
+        "warehouse",
+        "product",
+        "quantity",
+        "min_stock",
+        "is_low_stock_display",
+        "updated_at",
+    )
+
+    list_filter = (
+        "shop",
+        "warehouse",
+    )
+
+    search_fields = (
+        "warehouse__name",
+        "warehouse__code",
+        "product__name",
+        "product__code",
+        "product__sku",
+        "shop__name",
+        "shop__code",
+    )
+
+    ordering = ("shop", "warehouse", "product")
+
+    def is_low_stock_display(self, obj):
+        return obj.quantity <= obj.min_stock
+    is_low_stock_display.boolean = True
+    is_low_stock_display.short_description = "Low Stock"
+    
+
+@admin.register(StockTransfer)
+class StockTransferAdmin(admin.ModelAdmin):
+
+    inlines = [StockTransferItemInline]
+
+    list_display = (
+        "id",
+        "reference_no",
+        "shop",
+        "from_warehouse",
+        "to_warehouse",
+        "status",
+        "created_by",
+        "completed_at",
+        "created_at",
+    )
+
+    list_filter = (
+        "shop",
+        "status",
+        "from_warehouse",
+        "to_warehouse",
+    )
+
+    search_fields = (
+        "reference_no",
+        "note",
+        "from_warehouse__name",
+        "to_warehouse__name",
+        "shop__name",
+        "shop__code",
+    )
+
+    ordering = ("-created_at", "-id")
+
+    readonly_fields = (
+        "reference_no",
+        "status",
+        "created_by",
+        "completed_by",
+        "completed_at",
+        "cancelled_by",
+        "cancelled_at",
+        "created_at",
+        "updated_at",
+    )
+
+    def has_delete_permission(self, request, obj=None):
+        if obj and obj.status != "DRAFT":
+            return False
+        return super().has_delete_permission(request, obj)
+
+    def get_readonly_fields(self, request, obj=None):
+        ro = list(self.readonly_fields)
+        if obj and obj.status != "DRAFT":
+            ro.extend(["shop", "from_warehouse", "to_warehouse", "note"])
+        return ro
+
+
 @admin.register(StockAdjustment)
 class StockAdjustmentAdmin(admin.ModelAdmin):
 
@@ -414,7 +552,6 @@ class StockAdjustmentAdmin(admin.ModelAdmin):
         "new_stock",
         "reason",
         "adjusted_at"
-
     )
 
     list_filter=(

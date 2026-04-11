@@ -1,6 +1,6 @@
 from decimal import Decimal
 from django.db import models, transaction
-from django.db.models import Q, F
+from django.db.models import Q, F, Sum
 from django.conf import settings
 from django.utils import timezone
 from django.utils.text import slugify
@@ -321,7 +321,364 @@ class ShopFeature(CleanSaveMixin, models.Model):
             raise ValidationError({"shop": "Shop is required."})
 
     def __str__(self):
-        return f"Features - {self.shop.name}"    
+        return f"Features - {self.shop.name}"
+    
+    
+# ==========================================================
+# WAREHOUSE
+# ==========================================================
+class Warehouse(CleanSaveMixin, models.Model):
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="warehouses"
+    )
+
+    name = models.CharField(max_length=100)
+    code = models.CharField(max_length=30)
+    location = models.TextField(blank=True, default="")
+
+    is_active = models.BooleanField(default=True)
+    is_default = models.BooleanField(default=False)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("name", "id")
+        indexes = [
+            models.Index(fields=["shop", "name"]),
+            models.Index(fields=["shop", "code"]),
+            models.Index(fields=["shop", "is_active"]),
+            models.Index(fields=["shop", "is_default"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["shop", "name"],
+                name="unique_warehouse_name_per_shop"
+            ),
+            models.UniqueConstraint(
+                fields=["shop", "code"],
+                name="unique_warehouse_code_per_shop"
+            ),
+        ]
+
+    def clean(self):
+        self.name = (self.name or "").strip()
+        self.code = (self.code or "").strip().upper()
+        self.location = (self.location or "").strip()
+
+        if not self.shop_id:
+            raise ValidationError({"shop": "Shop is required."})
+
+        if not self.name:
+            raise ValidationError({"name": "Warehouse name is required."})
+
+        if not self.code:
+            raise ValidationError({"code": "Warehouse code is required."})
+
+    def __str__(self):
+        return f"{self.name} ({self.code})"
+    
+
+# ==========================================================
+# WAREHOUSE STOCK HELPERS
+# ==========================================================
+def sync_product_total_stock(product_id: int):
+    """
+    Sinkronkan Product.stock dari total WarehouseStock.quantity
+    agar modul lama tetap aman.
+    """
+    total = (
+        WarehouseStock.objects
+        .filter(product_id=product_id)
+        .aggregate(total_qty=Sum("quantity"))
+        .get("total_qty")
+        or 0
+    )
+    Product.objects.filter(pk=product_id).update(stock=total)
+    
+
+# ==========================================================
+# WAREHOUSE STOCK
+# ==========================================================
+class WarehouseStock(CleanSaveMixin, models.Model):
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="warehouse_stocks"
+    )
+
+    warehouse = models.ForeignKey(
+        "Warehouse",
+        on_delete=models.CASCADE,
+        related_name="stocks"
+    )
+
+    product = models.ForeignKey(
+        "Product",
+        on_delete=models.CASCADE,
+        related_name="warehouse_stocks"
+    )
+
+    quantity = models.IntegerField(default=0)
+    min_stock = models.IntegerField(default=0)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("warehouse", "product", "id")
+        indexes = [
+            models.Index(fields=["shop", "warehouse"]),
+            models.Index(fields=["shop", "product"]),
+            models.Index(fields=["shop", "quantity"]),
+            models.Index(fields=["shop", "min_stock"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["warehouse", "product"],
+                name="unique_product_per_warehouse"
+            )
+        ]
+
+    def clean(self):
+        if not self.shop_id:
+            raise ValidationError({"shop": "Shop is required."})
+
+        if not self.warehouse_id:
+            raise ValidationError({"warehouse": "Warehouse is required."})
+
+        if not self.product_id:
+            raise ValidationError({"product": "Product is required."})
+
+        if self.quantity < 0:
+            raise ValidationError({"quantity": "Quantity cannot be negative."})
+
+        if self.min_stock < 0:
+            raise ValidationError({"min_stock": "Minimum stock cannot be negative."})
+
+        if self.warehouse_id and self.warehouse and self.warehouse.shop_id != self.shop_id:
+            raise ValidationError({"warehouse": "Warehouse must belong to the same shop."})
+
+        if self.product_id and self.product and self.product.shop_id != self.shop_id:
+            raise ValidationError({"product": "Product must belong to the same shop."})
+
+        if self.product_id and self.product and not self.product.track_stock:
+            raise ValidationError({"product": "This product does not use stock tracking."})
+
+    @property
+    def is_low_stock(self):
+        return self.quantity <= self.min_stock
+
+    def __str__(self):
+        return f"{self.warehouse.name} - {self.product.name} ({self.quantity})"
+    
+def sync_product_total_stock(product_id: int):
+    total = (
+        WarehouseStock.objects
+        .filter(product_id=product_id)
+        .aggregate(total_qty=Sum("quantity"))
+        .get("total_qty")
+        or 0
+    )
+    Product.objects.filter(pk=product_id).update(stock=total)      
+    
+    
+
+# ==========================================================
+# STOCK TRANSFER
+# ==========================================================
+class StockTransfer(CleanSaveMixin, models.Model):
+    STATUS_DRAFT = "DRAFT"
+    STATUS_COMPLETED = "COMPLETED"
+    STATUS_CANCELLED = "CANCELLED"
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, "Draft"),
+        (STATUS_COMPLETED, "Completed"),
+        (STATUS_CANCELLED, "Cancelled"),
+    ]
+
+    shop = models.ForeignKey(
+        "Shop",
+        on_delete=models.CASCADE,
+        related_name="stock_transfers"
+    )
+
+    reference_no = models.CharField(max_length=64, blank=True, default="", db_index=True)
+
+    from_warehouse = models.ForeignKey(
+        "Warehouse",
+        on_delete=models.PROTECT,
+        related_name="outgoing_transfers"
+    )
+
+    to_warehouse = models.ForeignKey(
+        "Warehouse",
+        on_delete=models.PROTECT,
+        related_name="incoming_transfers"
+    )
+
+    note = models.TextField(blank=True, default="")
+
+    status = models.CharField(
+        max_length=20,
+        choices=STATUS_CHOICES,
+        default=STATUS_DRAFT,
+        db_index=True
+    )
+
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="created_stock_transfers"
+    )
+
+    completed_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="completed_stock_transfers"
+    )
+
+    completed_at = models.DateTimeField(null=True, blank=True)
+
+    cancelled_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="cancelled_stock_transfers"
+    )
+
+    cancelled_at = models.DateTimeField(null=True, blank=True)
+
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("-created_at", "-id")
+        indexes = [
+            models.Index(fields=["shop", "status"]),
+            models.Index(fields=["shop", "created_at"]),
+            models.Index(fields=["shop", "reference_no"]),
+        ]
+
+    def clean(self):
+        self.reference_no = (self.reference_no or "").strip()
+        self.note = (self.note or "").strip()
+
+        if not self.shop_id:
+            raise ValidationError({"shop": "Shop is required."})
+
+        if not self.from_warehouse_id:
+            raise ValidationError({"from_warehouse": "From warehouse is required."})
+
+        if not self.to_warehouse_id:
+            raise ValidationError({"to_warehouse": "To warehouse is required."})
+
+        if self.from_warehouse_id == self.to_warehouse_id:
+            raise ValidationError({
+                "to_warehouse": "Destination warehouse must be different from source warehouse."
+            })
+
+        if self.from_warehouse_id and self.from_warehouse and self.from_warehouse.shop_id != self.shop_id:
+            raise ValidationError({
+                "from_warehouse": "Source warehouse must belong to the same shop."
+            })
+
+        if self.to_warehouse_id and self.to_warehouse and self.to_warehouse.shop_id != self.shop_id:
+            raise ValidationError({
+                "to_warehouse": "Destination warehouse must belong to the same shop."
+            })
+
+        if self.created_by_id and self.created_by and not self.created_by.is_superuser:
+            if self.created_by.shop_id != self.shop_id:
+                raise ValidationError({
+                    "created_by": "Created by user must belong to the same shop."
+                })
+
+        if self.completed_by_id and self.completed_by and not self.completed_by.is_superuser:
+            if self.completed_by.shop_id != self.shop_id:
+                raise ValidationError({
+                    "completed_by": "Completed by user must belong to the same shop."
+                })
+
+        if self.cancelled_by_id and self.cancelled_by and not self.cancelled_by.is_superuser:
+            if self.cancelled_by.shop_id != self.shop_id:
+                raise ValidationError({
+                    "cancelled_by": "Cancelled by user must belong to the same shop."
+                })
+
+    def save(self, *args, **kwargs):
+        is_new = self.pk is None
+        self.full_clean()
+        super().save(*args, **kwargs)
+
+        if (is_new or not self.reference_no) and self.pk:
+            ref = f"TRF{self.pk:012d}"
+            if self.reference_no != ref:
+                self.reference_no = ref
+                super().save(update_fields=["reference_no"])
+
+    def __str__(self):
+        return self.reference_no or f"Transfer #{self.id}"
+    
+
+class StockTransferItem(CleanSaveMixin, models.Model):
+    transfer = models.ForeignKey(
+        "StockTransfer",
+        on_delete=models.CASCADE,
+        related_name="items"
+    )
+
+    product = models.ForeignKey(
+        "Product",
+        on_delete=models.PROTECT,
+        related_name="stock_transfer_items"
+    )
+
+    quantity = models.PositiveIntegerField(default=1)
+
+    class Meta:
+        ordering = ("id",)
+        constraints = [
+            models.UniqueConstraint(
+                fields=["transfer", "product"],
+                name="unique_product_per_stock_transfer"
+            )
+        ]
+        indexes = [
+            models.Index(fields=["transfer", "product"]),
+        ]
+
+    def clean(self):
+        if not self.transfer_id:
+            raise ValidationError({"transfer": "Transfer is required."})
+
+        if not self.product_id:
+            raise ValidationError({"product": "Product is required."})
+
+        if self.quantity <= 0:
+            raise ValidationError({"quantity": "Quantity must be greater than 0."})
+
+        if self.product_id and self.transfer_id:
+            if self.product.shop_id != self.transfer.shop_id:
+                raise ValidationError({
+                    "product": "Product must belong to the same shop as transfer."
+                })
+
+            if not self.product.track_stock:
+                raise ValidationError({
+                    "product": "This product does not use stock tracking."
+                })
+
+    def __str__(self):
+        return f"{self.product.name} x{self.quantity}"                      
 
 
 # ========== CUSTOMER ==========
@@ -1289,6 +1646,8 @@ class StockMovement(CleanSaveMixin, models.Model):
         ADJUSTMENT = "ADJUSTMENT", "Adjustment"
         COUNT = "COUNT", "Inventory Count"
         PURCHASE = "PURCHASE", "Purchase"
+        TRANSFER_OUT = "TRANSFER_OUT", "Transfer Out"
+        TRANSFER_IN = "TRANSFER_IN", "Transfer In"
 
     shop = models.ForeignKey(
         "Shop",

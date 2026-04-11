@@ -277,17 +277,26 @@ JAZZMIN_SETTINGS = {
         "pos.Purchase": "fas fa-truck-loading",
         "pos.Shift": "fas fa-clock",
         "pos.Expense": "fas fa-coins",
-        "pos.TokenProxy": "fas fa-shield-keyhole",
         "pos.Shop": "fas fa-store",
-        "pos.CustomUser": "fas fa-user-shield",
         "pos.Banner": "fas fa-image",
-        "auth.Group": "fas fa-users",
-        "pos.TokenProxy": "fas fa-key",
-        
+
         "pos.StockAdjustment": "fas fa-sliders-h",
         "pos.InventoryCount": "fas fa-clipboard-check",
         "pos.ProductReturn": "fas fa-undo",
         "pos.StockMovement": "fas fa-exchange-alt",
+
+        "pos.Warehouse": "fas fa-warehouse",
+        "pos.WarehouseStock": "fas fa-boxes-stacked",
+        "pos.StockTransfer": "fas fa-right-left",
+
+        "pos.BankAccount": "fas fa-building-columns",
+        "pos.PaymentMethod": "fas fa-money-check-dollar",
+        "pos.SalePayment": "fas fa-receipt",
+        "pos.BankLedger": "fas fa-book",
+
+        "auth.Group": "fas fa-users",
+        "pos.TokenProxy": "fas fa-key",
+        "pos.PlatformUser": "fas fa-user-shield",
     },
     "custom_links": {
         "pos": [
@@ -298,25 +307,72 @@ JAZZMIN_SETTINGS = {
         ]
     },
     "order_with_respect_to": [
-        "pos.Customer", "pos.Supplier", "pos.Product", "pos.Order", "pos.OrderItem",
-        "pos.Expense", "pos.Category", "pos.Unit", "pos.Shop", "pos.Banner",
-        "auth.Group", "pos.CustomUser", "pos.TokenProxy",
+        "pos.Customer",
+        "pos.Supplier",
+        "pos.Category",
+        "pos.Unit",
+        "pos.Product",
+        "pos.Order",
+        "pos.Purchase",
+        "pos.Expense",
+        "pos.StockAdjustment",
+        "pos.InventoryCount",
+        "pos.ProductReturn",
+        "pos.StockMovement",
+        "pos.Warehouse",
+        "pos.WarehouseStock",
+        "pos.StockTransfer",
+        "pos.BankAccount",
+        "pos.PaymentMethod",
+        "pos.SalePayment",
+        "pos.BankLedger",
+        "pos.Shop",
+        "pos.Banner",
+        "auth.Group",
+        "pos.PlatformUser",
+        "pos.TokenProxy",
     ],
     "hide_apps": ["auth", "authtoken"],
     "hide_models": ["auth.User", "auth.Group"],
     "show_ui_builder": False,
     "topmenu_links": [
         {"name": "Dashboard", "url": "/admin", "permissions": ["auth.view_user"]},
-        {"model": "pos.CustomUser"},
+        {"model": "pos.PlatformUser"},
     ],
     "side_menu": [
         {"app": "pos", "label": "Customers", "models": ["pos.Customer"]},
         {"app": "pos", "label": "Suppliers", "models": ["pos.Supplier"]},
         {"app": "pos", "label": "Products Category", "models": ["pos.Category"]},
         {"app": "pos", "label": "Products", "models": ["pos.Product"]},
-        {"app": "pos", "label": "Orders", "models": ["pos.Order"]},
+        {"app": "pos", "label": "Orders", "models": ["pos.Order", "pos.Purchase"]},
         {"app": "pos", "label": "Expense", "models": ["pos.Expense"]},
         {"app": "pos", "label": "Banners", "models": ["pos.Banner"]},
+
+        {
+            "label": "Inventory",
+            "icon": "fas fa-boxes-stacked",
+            "models": [
+                "pos.StockAdjustment",
+                "pos.InventoryCount",
+                "pos.ProductReturn",
+                "pos.StockMovement",
+                "pos.Warehouse",
+                "pos.WarehouseStock",
+                "pos.StockTransfer",
+            ],
+        },
+
+        {
+            "label": "Finance",
+            "icon": "fas fa-building-columns",
+            "models": [
+                "pos.BankAccount",
+                "pos.PaymentMethod",
+                "pos.SalePayment",
+                "pos.BankLedger",
+            ],
+        },
+
         {
             "label": "Reports",
             "icon": "fas fa-chart-line",
@@ -327,15 +383,17 @@ JAZZMIN_SETTINGS = {
                 {"name": "Expense Chart", "url": "/admin/reports/expense-chart/"},
             ],
         },
+
         {
             "label": "Settings",
             "icon": "fas fa-cogs",
             "models": ["pos.Shop", "pos.Unit"],
         },
+
         {
             "label": "Admin Users",
             "icon": "fas fa-user-shield",
-            "models": ["auth.Group", "pos.CustomUser", "pos.TokenProxy"],
+            "models": ["auth.Group", "pos.PlatformUser", "pos.TokenProxy"],
         },
     ],
 }

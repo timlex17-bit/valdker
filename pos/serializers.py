@@ -10,7 +10,9 @@ from .models import (
     Order, OrderItem, Shop, ShopFeature, Expense,
     StockAdjustment, InventoryCount, InventoryCountItem,
     ProductReturn, ProductReturnItem, StockMovement,
-    PaymentMethod, BankAccount, SalePayment, BankLedger
+    PaymentMethod, BankAccount, SalePayment, BankLedger,
+    Warehouse, WarehouseStock, sync_product_total_stock,
+    StockTransfer, StockTransferItem,
 )
 
 User = get_user_model()
@@ -271,6 +273,481 @@ class UnitSerializer(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         ensure_instance_belongs_to_shop(instance, self.context)
         return super().update(instance, validated_data)
+    
+    
+# ==========================================================
+# Warehouse
+# ==========================================================
+class WarehouseSerializer(serializers.ModelSerializer):
+    shop_id = serializers.IntegerField(source="shop.id", read_only=True)
+    shop_name = serializers.CharField(source="shop.name", read_only=True)
+    shop_code = serializers.CharField(source="shop.code", read_only=True)
+
+    class Meta:
+        model = Warehouse
+        fields = [
+            "id",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "name",
+            "code",
+            "location",
+            "is_active",
+            "is_default",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "created_at",
+            "updated_at",
+        ]
+
+    def validate(self, attrs):
+        shop = require_tenant_shop(self.context)
+
+        name = clean_str(attrs.get("name") or getattr(self.instance, "name", ""))
+        code = clean_str(attrs.get("code") or getattr(self.instance, "code", "")).upper()
+        location = clean_str(attrs.get("location") or getattr(self.instance, "location", ""))
+
+        if not name:
+            raise serializers.ValidationError({"name": "Warehouse name is required."})
+
+        if not code:
+            raise serializers.ValidationError({"code": "Warehouse code is required."})
+
+        attrs["name"] = name
+        attrs["code"] = code
+        attrs["location"] = location
+
+        qs_name = Warehouse.objects.filter(shop=shop, name__iexact=name)
+        qs_code = Warehouse.objects.filter(shop=shop, code__iexact=code)
+
+        if self.instance:
+            ensure_instance_belongs_to_shop(self.instance, self.context)
+            qs_name = qs_name.exclude(pk=self.instance.pk)
+            qs_code = qs_code.exclude(pk=self.instance.pk)
+
+        if qs_name.exists():
+            raise serializers.ValidationError({
+                "name": "Warehouse dengan nama ini sudah ada di shop Anda."
+            })
+
+        if qs_code.exists():
+            raise serializers.ValidationError({
+                "code": "Warehouse code sudah ada di shop Anda."
+            })
+
+        return attrs
+
+    def create(self, validated_data):
+        shop = require_tenant_shop(self.context)
+        validated_data = inject_shop_if_supported(Warehouse, validated_data, shop)
+
+        with transaction.atomic():
+            is_default = validated_data.get("is_default", False)
+
+            # Jika warehouse pertama di shop, otomatis default
+            if not Warehouse.objects.filter(shop=shop).exists():
+                validated_data["is_default"] = True
+                is_default = True
+
+            if is_default:
+                Warehouse.objects.filter(shop=shop, is_default=True).update(is_default=False)
+
+            obj = Warehouse.objects.create(**validated_data)
+            return obj
+
+    def update(self, instance, validated_data):
+        shop = ensure_instance_belongs_to_shop(instance, self.context)
+
+        with transaction.atomic():
+            is_default = validated_data.get("is_default", instance.is_default)
+
+            if is_default:
+                Warehouse.objects.filter(shop=shop, is_default=True).exclude(
+                    pk=instance.pk
+                ).update(is_default=False)
+
+            instance = super().update(instance, validated_data)
+
+            # Pastikan shop selalu punya minimal 1 default warehouse
+            if not Warehouse.objects.filter(shop=shop, is_default=True).exists():
+                instance.is_default = True
+                instance.save(update_fields=["is_default"])
+
+            return instance    
+
+
+# ==========================================================
+# Warehouse Stock
+# ==========================================================
+class WarehouseStockSerializer(serializers.ModelSerializer):
+    shop_id = serializers.IntegerField(source="shop.id", read_only=True)
+    shop_name = serializers.CharField(source="shop.name", read_only=True)
+    shop_code = serializers.CharField(source="shop.code", read_only=True)
+
+    warehouse_name = serializers.CharField(source="warehouse.name", read_only=True)
+    warehouse_code = serializers.CharField(source="warehouse.code", read_only=True)
+
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_code = serializers.CharField(source="product.code", read_only=True)
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+    product_track_stock = serializers.BooleanField(source="product.track_stock", read_only=True)
+
+    is_low_stock = serializers.BooleanField(read_only=True)
+
+    warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.none())
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.none())
+
+    class Meta:
+        model = WarehouseStock
+        fields = [
+            "id",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "warehouse",
+            "warehouse_name",
+            "warehouse_code",
+            "product",
+            "product_name",
+            "product_code",
+            "product_sku",
+            "product_track_stock",
+            "quantity",
+            "min_stock",
+            "is_low_stock",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = [
+            "id",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "warehouse_name",
+            "warehouse_code",
+            "product_name",
+            "product_code",
+            "product_sku",
+            "product_track_stock",
+            "is_low_stock",
+            "created_at",
+            "updated_at",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["warehouse"].queryset = tenant_qs(Warehouse, self.context)
+        self.fields["product"].queryset = tenant_qs(Product, self.context, track_stock=True)
+
+    def validate(self, attrs):
+        shop = require_tenant_shop(self.context)
+
+        warehouse = attrs.get("warehouse", getattr(self.instance, "warehouse", None))
+        product = attrs.get("product", getattr(self.instance, "product", None))
+        quantity = attrs.get("quantity", getattr(self.instance, "quantity", 0))
+        min_stock = attrs.get("min_stock", getattr(self.instance, "min_stock", 0))
+
+        if warehouse is None:
+            raise serializers.ValidationError({"warehouse": "Warehouse is required."})
+
+        if product is None:
+            raise serializers.ValidationError({"product": "Product is required."})
+
+        if warehouse.shop_id != shop.id:
+            raise serializers.ValidationError({"warehouse": "Warehouse does not belong to your shop."})
+
+        if product.shop_id != shop.id:
+            raise serializers.ValidationError({"product": "Product does not belong to your shop."})
+
+        if not product.track_stock:
+            raise serializers.ValidationError({"product": "This product does not use stock tracking."})
+
+        if quantity is None or quantity < 0:
+            raise serializers.ValidationError({"quantity": "Quantity must be 0 or greater."})
+
+        if min_stock is None or min_stock < 0:
+            raise serializers.ValidationError({"min_stock": "Minimum stock must be 0 or greater."})
+
+        qs = WarehouseStock.objects.filter(shop=shop, warehouse=warehouse, product=product)
+        if self.instance:
+            ensure_instance_belongs_to_shop(self.instance, self.context)
+            qs = qs.exclude(pk=self.instance.pk)
+
+        if qs.exists():
+            raise serializers.ValidationError({
+                "product": "Stock row for this product already exists in the selected warehouse."
+            })
+
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        shop = require_tenant_shop(self.context)
+        validated_data = inject_shop_if_supported(WarehouseStock, validated_data, shop)
+
+        obj = WarehouseStock.objects.create(**validated_data)
+        sync_product_total_stock(obj.product_id)
+        return obj
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        ensure_instance_belongs_to_shop(instance, self.context)
+
+        instance = super().update(instance, validated_data)
+        sync_product_total_stock(instance.product_id)
+        return instance
+
+
+# ==========================================================
+# Stock Transfer
+# ==========================================================
+class StockTransferItemSerializer(serializers.ModelSerializer):
+    product = serializers.PrimaryKeyRelatedField(queryset=Product.objects.none())
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    product_code = serializers.CharField(source="product.code", read_only=True)
+    product_sku = serializers.CharField(source="product.sku", read_only=True)
+
+    class Meta:
+        model = StockTransferItem
+        fields = [
+            "id",
+            "product",
+            "product_name",
+            "product_code",
+            "product_sku",
+            "quantity",
+        ]
+        read_only_fields = [
+            "id",
+            "product_name",
+            "product_code",
+            "product_sku",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields["product"].queryset = tenant_qs(Product, self.context, track_stock=True)
+
+    def validate(self, attrs):
+        shop = require_tenant_shop(self.context)
+        product = attrs.get("product")
+        quantity = attrs.get("quantity")
+
+        if product is None:
+            raise serializers.ValidationError({"product": "Product is required."})
+
+        if product.shop_id != shop.id:
+            raise serializers.ValidationError({"product": "Product does not belong to your shop."})
+
+        if not product.track_stock:
+            raise serializers.ValidationError({"product": "This product does not use stock tracking."})
+
+        if quantity is None or quantity <= 0:
+            raise serializers.ValidationError({"quantity": "Quantity must be greater than 0."})
+
+        return attrs
+
+
+class StockTransferSerializer(serializers.ModelSerializer):
+    shop_id = serializers.IntegerField(source="shop.id", read_only=True)
+    shop_name = serializers.CharField(source="shop.name", read_only=True)
+    shop_code = serializers.CharField(source="shop.code", read_only=True)
+
+    from_warehouse_name = serializers.CharField(source="from_warehouse.name", read_only=True)
+    from_warehouse_code = serializers.CharField(source="from_warehouse.code", read_only=True)
+
+    to_warehouse_name = serializers.CharField(source="to_warehouse.name", read_only=True)
+    to_warehouse_code = serializers.CharField(source="to_warehouse.code", read_only=True)
+
+    created_by_name = serializers.SerializerMethodField()
+    completed_by_name = serializers.SerializerMethodField()
+    cancelled_by_name = serializers.SerializerMethodField()
+
+    from_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.none())
+    to_warehouse = serializers.PrimaryKeyRelatedField(queryset=Warehouse.objects.none())
+
+    items = StockTransferItemSerializer(many=True)
+
+    class Meta:
+        model = StockTransfer
+        fields = [
+            "id",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "reference_no",
+            "from_warehouse",
+            "from_warehouse_name",
+            "from_warehouse_code",
+            "to_warehouse",
+            "to_warehouse_name",
+            "to_warehouse_code",
+            "note",
+            "status",
+            "created_by",
+            "created_by_name",
+            "completed_by",
+            "completed_by_name",
+            "completed_at",
+            "cancelled_by",
+            "cancelled_by_name",
+            "cancelled_at",
+            "created_at",
+            "updated_at",
+            "items",
+        ]
+        read_only_fields = [
+            "id",
+            "shop_id",
+            "shop_name",
+            "shop_code",
+            "reference_no",
+            "status",
+            "created_by",
+            "created_by_name",
+            "completed_by",
+            "completed_by_name",
+            "completed_at",
+            "cancelled_by",
+            "cancelled_by_name",
+            "cancelled_at",
+            "created_at",
+            "updated_at",
+        ]
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        self.fields["from_warehouse"].queryset = tenant_qs(Warehouse, self.context, is_active=True)
+        self.fields["to_warehouse"].queryset = tenant_qs(Warehouse, self.context, is_active=True)
+
+        if "items" in self.fields:
+            child = self.fields["items"].child
+            child.context.update(self.context)
+            child.fields["product"].queryset = tenant_qs(Product, self.context, track_stock=True)
+
+    def get_created_by_name(self, obj):
+        if not obj.created_by:
+            return ""
+        return getattr(obj.created_by, "get_full_name", lambda: "")().strip() or getattr(obj.created_by, "username", "")
+
+    def get_completed_by_name(self, obj):
+        if not obj.completed_by:
+            return ""
+        return getattr(obj.completed_by, "get_full_name", lambda: "")().strip() or getattr(obj.completed_by, "username", "")
+
+    def get_cancelled_by_name(self, obj):
+        if not obj.cancelled_by:
+            return ""
+        return getattr(obj.cancelled_by, "get_full_name", lambda: "")().strip() or getattr(obj.cancelled_by, "username", "")
+
+    def validate(self, attrs):
+        shop = require_tenant_shop(self.context)
+
+        from_warehouse = attrs.get("from_warehouse", getattr(self.instance, "from_warehouse", None))
+        to_warehouse = attrs.get("to_warehouse", getattr(self.instance, "to_warehouse", None))
+        note = clean_str(attrs.get("note") or getattr(self.instance, "note", ""))
+        items = attrs.get("items")
+
+        attrs["note"] = note
+
+        if from_warehouse is None:
+            raise serializers.ValidationError({"from_warehouse": "Source warehouse is required."})
+
+        if to_warehouse is None:
+            raise serializers.ValidationError({"to_warehouse": "Destination warehouse is required."})
+
+        if from_warehouse.shop_id != shop.id:
+            raise serializers.ValidationError({"from_warehouse": "Source warehouse does not belong to your shop."})
+
+        if to_warehouse.shop_id != shop.id:
+            raise serializers.ValidationError({"to_warehouse": "Destination warehouse does not belong to your shop."})
+
+        if from_warehouse.id == to_warehouse.id:
+            raise serializers.ValidationError({
+                "to_warehouse": "Destination warehouse must be different from source warehouse."
+            })
+
+        # Saat create wajib ada items
+        if self.instance is None:
+            if not items:
+                raise serializers.ValidationError({"items": "Items cannot be empty."})
+
+        if items is not None:
+            if len(items) == 0:
+                raise serializers.ValidationError({"items": "Items cannot be empty."})
+
+            seen_products = set()
+            for item in items:
+                product = item["product"]
+                if product.shop_id != shop.id:
+                    raise serializers.ValidationError({
+                        "items": f"Product '{product.name}' does not belong to your shop."
+                    })
+
+                if not product.track_stock:
+                    raise serializers.ValidationError({
+                        "items": f"Product '{product.name}' does not use stock tracking."
+                    })
+
+                if product.id in seen_products:
+                    raise serializers.ValidationError({
+                        "items": f"Duplicate product '{product.name}' in transfer items."
+                    })
+                seen_products.add(product.id)
+
+        return attrs
+
+    @transaction.atomic
+    def create(self, validated_data):
+        shop = require_tenant_shop(self.context)
+        user = require_authenticated_user(self.context)
+        items_data = validated_data.pop("items", [])
+
+        validated_data = inject_shop_if_supported(StockTransfer, validated_data, shop)
+        validated_data["created_by"] = user
+        validated_data["status"] = StockTransfer.STATUS_DRAFT
+
+        obj = StockTransfer.objects.create(**validated_data)
+
+        for item_data in items_data:
+            StockTransferItem.objects.create(
+                transfer=obj,
+                product=item_data["product"],
+                quantity=item_data["quantity"],
+            )
+
+        return obj
+
+    @transaction.atomic
+    def update(self, instance, validated_data):
+        ensure_instance_belongs_to_shop(instance, self.context)
+
+        if instance.status != StockTransfer.STATUS_DRAFT:
+            raise serializers.ValidationError("Only draft transfer can be edited.")
+
+        items_data = validated_data.pop("items", None)
+
+        instance = super().update(instance, validated_data)
+
+        if items_data is not None:
+            instance.items.all().delete()
+
+            for item_data in items_data:
+                StockTransferItem.objects.create(
+                    transfer=instance,
+                    product=item_data["product"],
+                    quantity=item_data["quantity"],
+                )
+
+        return instance
 
 
 # ==========================================================

@@ -41,6 +41,8 @@ from .models import (
     Order, OrderItem, Customer, Supplier, Product, Category, Unit, Banner, Shop, Expense,
     Purchase, StockAdjustment, InventoryCount, ProductReturn, StockMovement,
     PaymentMethod, BankAccount, SalePayment, BankLedger, CustomUser,
+    Warehouse, WarehouseStock, sync_product_total_stock,
+    StockTransfer, StockTransferItem,
 )
 from .permissions import (
     IsPlatformAdminOnly,
@@ -56,7 +58,8 @@ from .serializers import (
     ExpenseSerializer, BannerSerializer,
     StockAdjustmentSerializer, InventoryCountSerializer, ProductReturnSerializer, StockMovementSerializer,
     PaymentMethodSerializer, BankAccountSerializer, SalePaymentSerializer, BankLedgerSerializer,
-    StaffSerializer,
+    StaffSerializer, WarehouseSerializer, WarehouseStockSerializer,
+    StockTransferSerializer,
 )
 from .serializers_purchases import PurchaseSerializer, PurchaseCreateSerializer
 
@@ -1001,6 +1004,318 @@ class UnitViewSet(TenantModelViewSet):
     permission_classes = [OwnerOrManagerWriteOrRead]
     tenant_model = Unit
     tenant_ordering = ("name",)
+    
+
+class WarehouseViewSet(TenantModelViewSet):
+    serializer_class = WarehouseSerializer
+    permission_classes = [IsAuthenticated]
+    tenant_model = Warehouse
+    tenant_ordering = ("name", "id")
+
+    def get_queryset(self):
+        qs = _tenant_queryset(self.request, Warehouse).order_by("name", "id")
+
+        is_active = self.request.query_params.get("is_active")
+        is_default = self.request.query_params.get("is_default")
+        search = (self.request.query_params.get("search") or "").strip()
+
+        if is_active is not None:
+            val = str(is_active).lower().strip()
+            if val in ("true", "1", "yes"):
+                qs = qs.filter(is_active=True)
+            elif val in ("false", "0", "no"):
+                qs = qs.filter(is_active=False)
+
+        if is_default is not None:
+            val = str(is_default).lower().strip()
+            if val in ("true", "1", "yes"):
+                qs = qs.filter(is_default=True)
+            elif val in ("false", "0", "no"):
+                qs = qs.filter(is_default=False)
+
+        if search:
+            qs = qs.filter(
+                models.Q(name__icontains=search) |
+                models.Q(code__icontains=search) |
+                models.Q(location__icontains=search)
+            )
+
+        return qs
+
+    def perform_destroy(self, instance):
+        shop = _require_user_shop(self.request)
+
+        if instance.shop_id != shop.id:
+            raise ValidationError("Warehouse ini tidak berasal dari shop Anda.")
+
+        # Jangan biarkan shop kehilangan semua warehouse
+        if Warehouse.objects.filter(shop=shop).count() <= 1:
+            raise ValidationError("Minimal harus ada 1 warehouse di shop.")
+
+        was_default = instance.is_default
+        instance.delete()
+
+        # Jika yang dihapus default, pindahkan default ke warehouse lain
+        if was_default:
+            fallback = Warehouse.objects.filter(shop=shop).order_by("name", "id").first()
+            if fallback:
+                fallback.is_default = True
+                fallback.save(update_fields=["is_default"])
+                
+
+class WarehouseStockViewSet(TenantModelViewSet):
+    serializer_class = WarehouseStockSerializer
+    permission_classes = [IsAuthenticated]
+    tenant_model = WarehouseStock
+    tenant_ordering = ("warehouse__name", "product__name", "id")
+
+    def get_queryset(self):
+        qs = (
+            _tenant_queryset(self.request, WarehouseStock)
+            .select_related("shop", "warehouse", "product")
+            .order_by("warehouse__name", "product__name", "id")
+        )
+
+        warehouse_id = self.request.query_params.get("warehouse")
+        product_id = self.request.query_params.get("product")
+        low_stock = self.request.query_params.get("low_stock")
+        search = (self.request.query_params.get("search") or "").strip()
+
+        if warehouse_id:
+            try:
+                qs = qs.filter(warehouse_id=int(warehouse_id))
+            except (TypeError, ValueError):
+                pass
+
+        if product_id:
+            try:
+                qs = qs.filter(product_id=int(product_id))
+            except (TypeError, ValueError):
+                pass
+
+        if low_stock is not None:
+            val = str(low_stock).lower().strip()
+            if val in ("true", "1", "yes"):
+                qs = qs.filter(quantity__lte=F("min_stock"))
+            elif val in ("false", "0", "no"):
+                qs = qs.filter(quantity__gt=F("min_stock"))
+
+        if search:
+            qs = qs.filter(
+                models.Q(warehouse__name__icontains=search) |
+                models.Q(warehouse__code__icontains=search) |
+                models.Q(product__name__icontains=search) |
+                models.Q(product__code__icontains=search) |
+                models.Q(product__sku__icontains=search)
+            )
+
+        return qs
+
+    def perform_destroy(self, instance):
+        shop = _require_user_shop(self.request)
+
+        if instance.shop_id != shop.id:
+            raise ValidationError("Warehouse stock ini tidak berasal dari shop Anda.")
+
+        product_id = instance.product_id
+        instance.delete()
+        sync_product_total_stock(product_id)     
+        
+        
+class StockTransferViewSet(RequestContextMixin, viewsets.ModelViewSet):
+    serializer_class = StockTransferSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = (
+            _tenant_queryset(self.request, StockTransfer)
+            .select_related(
+                "shop",
+                "from_warehouse",
+                "to_warehouse",
+                "created_by",
+                "completed_by",
+                "cancelled_by",
+            )
+            .prefetch_related("items", "items__product")
+            .order_by("-created_at", "-id")
+        )
+
+        status_value = (self.request.query_params.get("status") or "").strip().upper()
+        from_warehouse = self.request.query_params.get("from_warehouse")
+        to_warehouse = self.request.query_params.get("to_warehouse")
+        search = (self.request.query_params.get("search") or "").strip()
+
+        if status_value:
+            qs = qs.filter(status=status_value)
+
+        if from_warehouse:
+            try:
+                qs = qs.filter(from_warehouse_id=int(from_warehouse))
+            except (TypeError, ValueError):
+                pass
+
+        if to_warehouse:
+            try:
+                qs = qs.filter(to_warehouse_id=int(to_warehouse))
+            except (TypeError, ValueError):
+                pass
+
+        if search:
+            qs = qs.filter(
+                models.Q(reference_no__icontains=search) |
+                models.Q(note__icontains=search) |
+                models.Q(from_warehouse__name__icontains=search) |
+                models.Q(to_warehouse__name__icontains=search) |
+                models.Q(items__product__name__icontains=search) |
+                models.Q(items__product__code__icontains=search) |
+                models.Q(items__product__sku__icontains=search)
+            ).distinct()
+
+        return qs
+
+    def perform_create(self, serializer):
+        shop = _require_user_shop(self.request)
+        serializer.save(shop=shop, created_by=self.request.user)
+
+    def perform_destroy(self, instance):
+        shop = _require_user_shop(self.request)
+
+        if instance.shop_id != shop.id:
+            raise ValidationError("Transfer ini tidak berasal dari shop Anda.")
+
+        if instance.status != StockTransfer.STATUS_DRAFT:
+            raise ValidationError("Only draft transfer can be deleted.")
+
+        instance.delete()
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def complete(self, request, pk=None):
+        shop = _require_user_shop(request)
+
+        transfer = (
+            StockTransfer.objects
+            .select_for_update()
+            .select_related("from_warehouse", "to_warehouse")
+            .prefetch_related("items", "items__product")
+            .get(pk=pk, shop=shop)
+        )
+
+        if transfer.status == StockTransfer.STATUS_COMPLETED:
+            return Response({"detail": "Transfer already completed."}, status=400)
+
+        if transfer.status == StockTransfer.STATUS_CANCELLED:
+            return Response({"detail": "Cancelled transfer cannot be completed."}, status=400)
+
+        items = list(transfer.items.select_related("product"))
+        if not items:
+            return Response({"detail": "Transfer items cannot be empty."}, status=400)
+
+        # Validasi stok cukup dulu
+        for item in items:
+            source_stock, _ = WarehouseStock.objects.select_for_update().get_or_create(
+                shop=shop,
+                warehouse=transfer.from_warehouse,
+                product=item.product,
+                defaults={"quantity": 0, "min_stock": 0},
+            )
+
+            if source_stock.quantity < item.quantity:
+                return Response({
+                    "detail": (
+                        f"Insufficient stock for '{item.product.name}' in warehouse "
+                        f"'{transfer.from_warehouse.name}'. Remaining {source_stock.quantity}, "
+                        f"requested {item.quantity}."
+                    )
+                }, status=400)
+
+        # Proses transfer
+        for item in items:
+            product = item.product
+
+            source_stock, _ = WarehouseStock.objects.select_for_update().get_or_create(
+                shop=shop,
+                warehouse=transfer.from_warehouse,
+                product=product,
+                defaults={"quantity": 0, "min_stock": 0},
+            )
+
+            dest_stock, _ = WarehouseStock.objects.select_for_update().get_or_create(
+                shop=shop,
+                warehouse=transfer.to_warehouse,
+                product=product,
+                defaults={"quantity": 0, "min_stock": 0},
+            )
+
+            before_source = source_stock.quantity
+            after_source = before_source - item.quantity
+
+            before_dest = dest_stock.quantity
+            after_dest = before_dest + item.quantity
+
+            source_stock.quantity = after_source
+            source_stock.save(update_fields=["quantity", "updated_at"])
+
+            dest_stock.quantity = after_dest
+            dest_stock.save(update_fields=["quantity", "updated_at"])
+
+            StockMovement.objects.create(
+                shop=shop,
+                product=product,
+                movement_type=StockMovement.Type.TRANSFER_OUT,
+                quantity_delta=-item.quantity,
+                before_stock=before_source,
+                after_stock=after_source,
+                note=f"{transfer.reference_no} | {transfer.from_warehouse.name} -> {transfer.to_warehouse.name}",
+                ref_model="StockTransfer",
+                ref_id=transfer.id,
+                created_by=request.user,
+            )
+
+            StockMovement.objects.create(
+                shop=shop,
+                product=product,
+                movement_type=StockMovement.Type.TRANSFER_IN,
+                quantity_delta=item.quantity,
+                before_stock=before_dest,
+                after_stock=after_dest,
+                note=f"{transfer.reference_no} | {transfer.from_warehouse.name} -> {transfer.to_warehouse.name}",
+                ref_model="StockTransfer",
+                ref_id=transfer.id,
+                created_by=request.user,
+            )
+
+            sync_product_total_stock(product.id)
+
+        transfer.status = StockTransfer.STATUS_COMPLETED
+        transfer.completed_by = request.user
+        transfer.completed_at = timezone.now()
+        transfer.save(update_fields=["status", "completed_by", "completed_at", "updated_at"])
+
+        data = self.get_serializer(transfer).data
+        return Response(data, status=200)
+
+    @action(detail=True, methods=["post"])
+    @transaction.atomic
+    def cancel(self, request, pk=None):
+        shop = _require_user_shop(request)
+
+        transfer = StockTransfer.objects.select_for_update().get(pk=pk, shop=shop)
+
+        if transfer.status == StockTransfer.STATUS_COMPLETED:
+            return Response({"detail": "Completed transfer cannot be cancelled."}, status=400)
+
+        if transfer.status == StockTransfer.STATUS_CANCELLED:
+            return Response({"detail": "Transfer already cancelled."}, status=400)
+
+        transfer.status = StockTransfer.STATUS_CANCELLED
+        transfer.cancelled_by = request.user
+        transfer.cancelled_at = timezone.now()
+        transfer.save(update_fields=["status", "cancelled_by", "cancelled_at", "updated_at"])
+
+        data = self.get_serializer(transfer).data
+        return Response(data, status=200)                       
 
 
 class PaymentMethodViewSet(TenantReadOnlyModelViewSet):

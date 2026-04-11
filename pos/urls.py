@@ -20,6 +20,9 @@ from .views import (
     BankLedgerViewSet,
     PurchaseViewSet,
     StaffViewSet,
+    WarehouseViewSet,
+    WarehouseStockViewSet,
+    StockTransferViewSet,
 )
 
 router = DefaultRouter()
@@ -34,6 +37,9 @@ router.register(r"orders", OrderViewSet, basename="order")
 router.register(r"shops", ShopViewSet, basename="shop")
 router.register(r"expenses", ExpenseViewSet, basename="expense")
 router.register(r"staff", StaffViewSet, basename="staff")
+router.register(r"warehouses", WarehouseViewSet, basename="warehouses")
+router.register(r"warehouse-stocks", WarehouseStockViewSet, basename="warehouse-stocks")
+router.register(r"stock-transfers", StockTransferViewSet, basename="stock-transfers")
 
 router.register(r"payment-methods", PaymentMethodViewSet, basename="payment-methods")
 router.register(r"bank-accounts", BankAccountViewSet, basename="bank-accounts")
